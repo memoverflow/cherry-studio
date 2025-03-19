@@ -1,16 +1,10 @@
 import type { GroundingMetadata } from '@google/generative-ai'
 import type { Assistant, MCPTool, MCPToolResponse, Message, Metrics } from '@renderer/types'
 
-interface CompletionUsage {
-  prompt_tokens: number
-  completion_tokens: number
-  total_tokens: number
-}
-
 interface ChunkCallbackData {
   text?: string
   reasoning_content?: string
-  usage?: CompletionUsage
+  usage?: OpenAI.Completions.CompletionUsage
   metrics?: Metrics
   search?: GroundingMetadata
   citations?: string[]
