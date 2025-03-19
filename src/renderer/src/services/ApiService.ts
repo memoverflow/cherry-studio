@@ -72,13 +72,12 @@ export async function fetchChatCompletion({
         message.content = message.content + text || ''
         message.usage = usage
 
-        // 合并metrics而不是直接覆盖，确保time_thinking_millsec不会丢失
+        // Merge metrics instead of directly overwriting to ensure that time_thinking_millsec is not lost.
         if (metrics) {
           message.metrics = {
             ...message.metrics,
             ...metrics
           }
-          console.log('[ApiService] Updated metrics:', JSON.stringify(message.metrics))
         }
 
         if (reasoning_content) {
@@ -160,8 +159,6 @@ export async function fetchTranslate({ message, assistant, onResponse }: FetchTr
   }
 
   const provider = getProviderByModel(model)
-
-  console.log('provider', provider)
 
   if (!hasApiKey(provider)) {
     throw new Error(i18n.t('error.no_api_key'))
@@ -321,5 +318,5 @@ export async function fetchModels(provider: Provider) {
  * @returns Formatted key string
  */
 export const formatApiKeys = (value: string) => {
-  return value.replaceAll('，', ',').replaceAll(' ', ',').replaceAll(' ', '').replaceAll('\n', ',')
+  return value.replace(/，/g, ',').replace(/ /g, ',').replace(/ /g, '').replace(/\n/g, ',')
 }

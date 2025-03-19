@@ -86,7 +86,7 @@ export default class BedrockProvider extends BaseProvider {
       onFilterMessages(filteredMessages)
 
       // Create abort controller
-      const lastUserMessage = filteredMessages.findLast((m) => m.role === 'user')
+      const lastUserMessage = [...filteredMessages].reverse().find((m) => m.role === 'user')
       const { abortController, cleanup } = createAbortController(lastUserMessage?.id)
       const { signal } = abortController
       this.abortController = abortController
@@ -301,7 +301,7 @@ export default class BedrockProvider extends BaseProvider {
       }
 
       // For thinking-type models, summary only includes content after </think>
-      content = content.replace(/^<think>(.*?)<\/think>/s, '')
+      content = content.replace(/^<think>([\s\S]*?)<\/think>/, '')
 
       return removeSpecialCharactersForTopicName(content.substring(0, 50))
     } catch (error) {
@@ -434,7 +434,7 @@ export default class BedrockProvider extends BaseProvider {
   /**
    * Generate an image based on the prompt
    */
-  public async generateImage(params: any): Promise<string[]> {
+  public async generateImage(): Promise<string[]> {
     try {
       // This is a placeholder for future implementation
       return []

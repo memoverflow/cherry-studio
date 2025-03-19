@@ -3,8 +3,9 @@ import { useAppDispatch } from '@renderer/store'
 import { setBedrockApikey } from '@renderer/store/llm'
 import { Input, Select, Switch, Tooltip } from 'antd'
 import { FC, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
-import { SettingHelpText, SettingRow, SettingRowTitle } from '..'
+import { SettingRow, SettingRowTitle } from '..'
 
 const REGIONS = [
   { label: 'US East (N. Virginia)', value: 'us-east-1' },
@@ -67,6 +68,7 @@ const BedrockSettings: FC<Props> = ({ settings, onUpdate }) => {
   const [accessKeyId, setAccessKeyId] = useState(settings.accessKeyId || '')
   const [secretAccessKey, setSecretAccessKey] = useState(settings.secretAccessKey || '')
   const [apiHost, setApiHost] = useState(`https://bedrock-runtime.${settings.region || 'us-east-1'}.amazonaws.com`)
+  const { t } = useTranslation()
 
   // 当 region 变化时更新 apiHost
   useEffect(() => {
@@ -90,7 +92,6 @@ const BedrockSettings: FC<Props> = ({ settings, onUpdate }) => {
       crossRegion: typeof newSettings.crossRegion !== 'undefined' ? newSettings.crossRegion : crossRegion
     }
     dispatch(setBedrockApikey(updatedSettings))
-    // 确保始终包含 region 信息
     const regionValue = updatedSettings.region || 'us-east-1'
 
     const apiKeyParts = [
@@ -110,9 +111,10 @@ const BedrockSettings: FC<Props> = ({ settings, onUpdate }) => {
   return (
     <>
       <SettingRow>
-        <SettingRowTitle>Access Key ID</SettingRowTitle>
+        <SettingRowTitle>{t('settings.bedrock.accessKeyId')}</SettingRowTitle>
         <Input
           value={accessKeyId}
+          placeholder={t('settings.bedrock.accessKeyId.placeholder')}
           onChange={(e) => setAccessKeyId(e.target.value)}
           onBlur={() => handleUpdate({ accessKeyId })}
           style={{ width: 400 }}
@@ -120,9 +122,10 @@ const BedrockSettings: FC<Props> = ({ settings, onUpdate }) => {
       </SettingRow>
 
       <SettingRow style={{ marginTop: 10 }}>
-        <SettingRowTitle>Secret Access Key</SettingRowTitle>
+        <SettingRowTitle>{t('settings.bedrock.secretAccessKey')}</SettingRowTitle>
         <Input.Password
           value={secretAccessKey}
+          placeholder={t('settings.bedrock.secretAccessKey.placeholder')}
           onChange={(e) => setSecretAccessKey(e.target.value)}
           onBlur={() => handleUpdate({ secretAccessKey })}
           style={{ width: 400 }}
@@ -131,8 +134,8 @@ const BedrockSettings: FC<Props> = ({ settings, onUpdate }) => {
 
       <SettingRow style={{ marginTop: 10 }}>
         <SettingRowTitle>
-          Region
-          <Tooltip title="Select the AWS region where your Bedrock models are deployed">
+          {t('settings.bedrock.region')}
+          <Tooltip title={t('settings.bedrock.region.tooltip')}>
             <InfoCircleOutlined style={{ marginLeft: 5 }} />
           </Tooltip>
         </SettingRowTitle>
@@ -142,7 +145,6 @@ const BedrockSettings: FC<Props> = ({ settings, onUpdate }) => {
               value={region}
               onChange={(value) => {
                 setRegion(value)
-                // 强制更新所有设置，确保 region 被更新
                 handleUpdate({
                   region: value,
                   accessKeyId,
@@ -158,14 +160,14 @@ const BedrockSettings: FC<Props> = ({ settings, onUpdate }) => {
       </SettingRow>
 
       <SettingRow style={{ marginTop: 10 }}>
-        <SettingRowTitle>API Host</SettingRowTitle>
+        <SettingRowTitle>{t('settings.bedrock.apiHost')}</SettingRowTitle>
         <Input value={apiHost} disabled={true} style={{ width: 400 }} />
       </SettingRow>
 
       <SettingRow style={{ marginTop: 10 }}>
         <SettingRowTitle>
-          Cross Region Access
-          <Tooltip title="Enable to access models in different regions">
+          {t('settings.bedrock.crossRegion')}
+          <Tooltip title={t('settings.bedrock.crossRegion.tooltip')}>
             <InfoCircleOutlined style={{ marginLeft: 5 }} />
           </Tooltip>
         </SettingRowTitle>
@@ -177,15 +179,6 @@ const BedrockSettings: FC<Props> = ({ settings, onUpdate }) => {
           }}
         />
       </SettingRow>
-
-      <SettingHelpText style={{ marginTop: 10 }}>
-        Make sure you have enabled the Bedrock service in your AWS account and have the necessary permissions.
-      </SettingHelpText>
-
-      <SettingHelpText style={{ marginTop: 5 }}>
-        Note: Cross Region Access is enabled by default. Model IDs will be prefixed with &ldquo;us.&rdquo; (e.g.,
-        us.anthropic.claude-3-sonnet-20240229-v1:0)
-      </SettingHelpText>
     </>
   )
 }

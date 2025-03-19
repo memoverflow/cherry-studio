@@ -592,7 +592,6 @@ const settingsSlice = createSlice({
       state,
       action: PayloadAction<{ region?: string; accessKeyId?: string; secretAccessKey?: string; crossRegion?: boolean }>
     ) => {
-      // 更新 bedrock 设置
       state.settings.bedrock = {
         ...state.settings.bedrock,
         ...action.payload
