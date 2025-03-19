@@ -28,7 +28,9 @@ import {
   SettingTitle
 } from '..'
 import ApiCheckPopup from './ApiCheckPopup'
+
 import BedrockSettings from './BedrockSettings'
+import GithubCopilotSettings from './GithubCopilotSettings'
 import GPUStackSettings from './GPUStackSettings'
 import GraphRAGSettings from './GraphRAGSettings'
 import HealthCheckPopup from './HealthCheckPopup'
@@ -243,9 +245,12 @@ const ProviderSetting: FC<Props> = ({ provider: _provider }) => {
   }
 
   useEffect(() => {
+    if (provider.id === 'copilot') {
+      return
+    }
     setApiKey(provider.apiKey)
     setApiHost(provider.apiHost)
-  }, [provider.apiKey, provider.apiHost])
+  }, [provider.apiKey, provider.apiHost, provider.id])
 
   // Save apiKey to provider when unmount
   useEffect(() => {
@@ -324,6 +329,37 @@ const ProviderSetting: FC<Props> = ({ provider: _provider }) => {
               <Button danger onClick={onReset}>
                 {t('settings.provider.api.url.reset')}
               </Button>
+      <SettingSubtitle style={{ marginTop: 5 }}>{t('settings.provider.api_key')}</SettingSubtitle>
+      <Space.Compact style={{ width: '100%', marginTop: 5 }}>
+        <Input.Password
+          value={apiKey}
+          placeholder={t('settings.provider.api_key')}
+          onChange={(e) => setApiKey(formatApiKeys(e.target.value))}
+          onBlur={onUpdateApiKey}
+          spellCheck={false}
+          type="password"
+          autoFocus={provider.enabled && apiKey === ''}
+          disabled={provider.id === 'copilot'}
+        />
+        {isProviderSupportAuth(provider) && <OAuthButton provider={provider} onSuccess={setApiKey} />}
+        <Button
+          type={apiValid ? 'primary' : 'default'}
+          ghost={apiValid}
+          onClick={onCheckApi}
+          disabled={!apiHost || apiChecking}>
+          {apiChecking ? <LoadingOutlined spin /> : apiValid ? <CheckOutlined /> : t('settings.provider.check')}
+        </Button>
+      </Space.Compact>
+      {apiKeyWebsite && (
+        <SettingHelpTextRow style={{ justifyContent: 'space-between' }}>
+          <HStack gap={5}>
+            <SettingHelpLink target="_blank" href={apiKeyWebsite}>
+              {t('settings.provider.get_api_key')}
+            </SettingHelpLink>
+            {isProviderSupportCharge(provider) && (
+              <SettingHelpLink onClick={() => providerCharge(provider.id)}>
+                {t('settings.provider.charge')}
+              </SettingHelpLink>
             )}
           </Space.Compact>
 
@@ -359,8 +395,6 @@ const ProviderSetting: FC<Props> = ({ provider: _provider }) => {
       {provider.id === 'graphrag-kylin-mountain' && provider.models.length > 0 && (
         <GraphRAGSettings provider={provider} />
       )}
-      {provider.type === 'bedrock' && (
-        <>
           <BedrockSettings
             settings={{
               region: provider.apiHost?.match(/https:\/\/bedrock-runtime\.(.+?)\.amazonaws\.com/)?.[1] || 'us-east-1',
@@ -378,6 +412,7 @@ const ProviderSetting: FC<Props> = ({ provider: _provider }) => {
           />
         </>
       )}
+      {provider.id === 'copilot' && <GithubCopilotSettings provider={provider} setApiKey={setApiKey} />}
       <SettingSubtitle style={{ marginBottom: 5 }}>
         <Flex align="center" justify="space-between" style={{ width: '100%' }}>
           <span>{t('common.models')}</span>
