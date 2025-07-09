@@ -26,7 +26,6 @@ import { ChunkType, ThinkingDeltaChunk } from '@renderer/types/chunk'
 import { Message } from '@renderer/types/newMessage'
 import { isBedrock } from '@renderer/types/provider'
 import {
-  BedrockOptions,
   BedrockSdkInstance,
   BedrockSdkMessageParam,
   BedrockSdkParams,
@@ -49,6 +48,7 @@ import { RequestTransformer, ResponseChunkTransformer } from '../types'
 interface BedrockUsage {
   inputTokens?: number
   outputTokens?: number
+  totalTokens?: number
 }
 
 export class BedrockAPIClient extends BaseApiClient<
@@ -156,8 +156,7 @@ export class BedrockAPIClient extends BaseApiClient<
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  override async createCompletions(payload: BedrockSdkParams, options?: BedrockOptions): Promise<BedrockSdkRawOutput> {
+  override async createCompletions(payload: BedrockSdkParams): Promise<BedrockSdkRawOutput> {
     const client = await this.getSdkInstance()
 
     // Convert BedrockSdkMessageParam[] to BedrockMessage[] for AWS SDK
@@ -269,7 +268,32 @@ export class BedrockAPIClient extends BaseApiClient<
     mcpToolResponse: MCPToolResponse,
     resp: MCPCallToolResponse
   ): BedrockSdkMessageParam | undefined {
+    // 处理工具调用响应的两种情况
     if ('toolUseId' in mcpToolResponse && mcpToolResponse.toolUseId) {
+      // 为 Bedrock 的工具调用结果准备内容
+      let resultText: string
+
+      if (Array.isArray(resp.content) && resp.content.length > 0 && resp.content[0].text) {
+        resultText = resp.content.map((c) => c.text || '').join('\n')
+      } else if (typeof resp.content === 'object') {
+        resultText = JSON.stringify(resp.content)
+      } else {
+        resultText = String(resp.content)
+      }
+      // 创建符合 Bedrock API 格式的工具结果消息
+      return {
+        role: 'user',
+        content: [
+          {
+            toolResult: {
+              toolUseId: mcpToolResponse.toolUseId,
+              content: [{ text: resultText }]
+            }
+          }
+        ]
+      } as BedrockSdkMessageParam
+    } else if ('toolCallId' in mcpToolResponse && mcpToolResponse.toolCallId) {
+      // 兼容其他格式的工具调用ID
       let resultText: string
 
       if (Array.isArray(resp.content) && resp.content.length > 0 && resp.content[0].text) {
@@ -284,7 +308,7 @@ export class BedrockAPIClient extends BaseApiClient<
         content: [
           {
             toolResult: {
-              toolUseId: mcpToolResponse.toolUseId,
+              toolUseId: mcpToolResponse.toolCallId,
               content: [{ text: resultText }]
             }
           }
@@ -305,7 +329,7 @@ export class BedrockAPIClient extends BaseApiClient<
     console.log('buildSdkMessages - toolResults', toolResults)
     console.log('buildSdkMessages - currentReqMessages', currentReqMessages)
 
-    // 简化逻辑，参照AnthropicAPIClient实现
+    // 判断是否为工具调用场景
     const hasTextOutput = typeof output === 'string' && output.trim().length > 0
     const hasToolCalls = toolCalls && toolCalls.length > 0
 
@@ -336,16 +360,17 @@ export class BedrockAPIClient extends BaseApiClient<
     }
 
     // 构建最终消息列表
-    const result = [...currentReqMessages]
+    let result = [...currentReqMessages]
 
     // 如果助手消息有内容，添加到结果中
     if (assistantMessage.content!.length > 0) {
       result.push(assistantMessage)
     }
 
-    // 始终添加工具结果（如果有）
+    // 如果有工具结果，则添加到结果中
+    // 注意：当有工具调用结果时，我们仍然需要保留以前的消息历史
     if (toolResults && toolResults.length > 0) {
-      result.push(...toolResults)
+      result = [...result, ...toolResults]
     }
 
     console.log('buildSdkMessages - result', result)
@@ -440,16 +465,6 @@ export class BedrockAPIClient extends BaseApiClient<
     }
   }
 
-  // Helper methods for cleaner response processing
-  private extractUsage(usage?: BedrockUsage) {
-    if (!usage) return null
-    return {
-      prompt_tokens: usage.inputTokens || 0,
-      completion_tokens: usage.outputTokens || 0,
-      total_tokens: (usage.inputTokens || 0) + (usage.outputTokens || 0)
-    }
-  }
-
   getResponseChunkTransformer(): ResponseChunkTransformer<BedrockSdkRawChunk> {
     return () => {
       const toolCalls: BedrockSdkToolCall[] = []
@@ -465,7 +480,7 @@ export class BedrockAPIClient extends BaseApiClient<
           if ('output' in chunk) {
             const response = chunk
             if (response.usage) {
-              usage = this.extractUsage(response.usage)
+              usage = response.usage
             }
             response.output?.message?.content?.forEach((item: any) => {
               if (item.text) {
@@ -494,13 +509,19 @@ export class BedrockAPIClient extends BaseApiClient<
               })
               console.log('completedToolCalls', completedToolCalls)
               controller.enqueue({ type: ChunkType.MCP_TOOL_CREATED, tool_calls: completedToolCalls })
+            } else {
+              // 只有在非工具调用时才发送完成信号
+              controller.enqueue({
+                type: ChunkType.LLM_RESPONSE_COMPLETE,
+                response: {
+                  usage: {
+                    prompt_tokens: usage.usage.inputTokens || 0,
+                    completion_tokens: usage.usage.outputTokens || 0,
+                    total_tokens: usage.usage.totalTokens || 0
+                  }
+                }
+              })
             }
-            
-            // 始终发送完成信号，与其他客户端保持一致
-            controller.enqueue({
-              type: ChunkType.LLM_RESPONSE_COMPLETE,
-              response: { usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }
-            })
           } else {
             // Handle streaming chunks by checking for the presence of specific keys
             const streamChunk = chunk as any
@@ -530,7 +551,19 @@ export class BedrockAPIClient extends BaseApiClient<
             }
 
             if (streamChunk.metadata?.usage) {
-              usage = this.extractUsage(streamChunk.metadata.usage)
+              usage = streamChunk.metadata
+              // 只有在非工具调用时才发送完成信号
+              console.log('usage', usage)
+              controller.enqueue({
+                type: ChunkType.LLM_RESPONSE_COMPLETE,
+                response: {
+                  usage: {
+                    prompt_tokens: usage.usage.inputTokens || 0,
+                    completion_tokens: usage.usage.outputTokens || 0,
+                    total_tokens: usage.usage.totalTokens || 0
+                  }
+                }
+              })
             }
 
             if (streamChunk.messageStop?.stopReason) {
@@ -550,12 +583,6 @@ export class BedrockAPIClient extends BaseApiClient<
                 console.log('completedToolCalls in stream', completedToolCalls)
                 controller.enqueue({ type: ChunkType.MCP_TOOL_CREATED, tool_calls: completedToolCalls })
               }
-              
-              // 始终发送完成信号，与其他客户端保持一致
-              controller.enqueue({
-                type: ChunkType.LLM_RESPONSE_COMPLETE,
-                response: { usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }
-              })
             }
           }
         }
