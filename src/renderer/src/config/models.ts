@@ -164,6 +164,7 @@ const visionAllowedModels = [
   'claude-3',
   'claude-sonnet-4',
   'claude-opus-4',
+  'nova',
   'vision',
   'glm-4(?:\\.\\d+)?v(?:-[\\w-]+)?',
   'qwen-vl',
