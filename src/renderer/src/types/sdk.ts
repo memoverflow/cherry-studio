@@ -8,6 +8,7 @@ import {
   ToolUseBlock
 } from '@anthropic-ai/sdk/resources'
 import { MessageStream } from '@anthropic-ai/sdk/resources/messages/messages'
+import { BedrockRuntimeClient, InferenceConfiguration, ToolConfiguration } from '@aws-sdk/client-bedrock-runtime'
 import {
   Content,
   CreateChatParameters,
@@ -20,14 +21,29 @@ import {
 } from '@google/genai'
 import OpenAI, { AzureOpenAI } from 'openai'
 import { Stream } from 'openai/streaming'
-import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime'
 
 import { EndpointType } from './index'
 
 export type SdkInstance = OpenAI | AzureOpenAI | Anthropic | GoogleGenAI | BedrockRuntimeClient
-export type SdkParams = OpenAISdkParams | OpenAIResponseSdkParams | AnthropicSdkParams | GeminiSdkParams | BedrockSdkParams
-export type SdkRawChunk = OpenAISdkRawChunk | OpenAIResponseSdkRawChunk | AnthropicSdkRawChunk | GeminiSdkRawChunk | BedrockSdkRawChunk
-export type SdkRawOutput = OpenAISdkRawOutput | OpenAIResponseSdkRawOutput | AnthropicSdkRawOutput | GeminiSdkRawOutput | BedrockSdkRawOutput
+export type BedrockSdkInstance = BedrockRuntimeClient
+export type SdkParams =
+  | OpenAISdkParams
+  | OpenAIResponseSdkParams
+  | AnthropicSdkParams
+  | GeminiSdkParams
+  | BedrockSdkParams
+export type SdkRawChunk =
+  | OpenAISdkRawChunk
+  | OpenAIResponseSdkRawChunk
+  | AnthropicSdkRawChunk
+  | GeminiSdkRawChunk
+  | BedrockSdkRawChunk
+export type SdkRawOutput =
+  | OpenAISdkRawOutput
+  | OpenAIResponseSdkRawOutput
+  | AnthropicSdkRawOutput
+  | GeminiSdkRawOutput
+  | BedrockSdkRawOutput
 export type SdkMessageParam =
   | OpenAISdkMessageParam
   | OpenAIResponseSdkMessageParam
@@ -40,7 +56,12 @@ export type SdkToolCall =
   | FunctionCall
   | OpenAIResponseSdkToolCall
   | BedrockSdkToolCall
-export type SdkTool = OpenAI.Chat.Completions.ChatCompletionTool | ToolUnion | Tool | OpenAIResponseSdkTool | BedrockSdkTool
+export type SdkTool =
+  | OpenAI.Chat.Completions.ChatCompletionTool
+  | ToolUnion
+  | Tool
+  | OpenAIResponseSdkTool
+  | BedrockSdkTool
 export type SdkModel = OpenAI.Models.Model | Anthropic.ModelInfo | GeminiModel | NewApiModel
 
 export type RequestOptions = Anthropic.RequestOptions | OpenAI.RequestOptions | GeminiOptions
@@ -123,19 +144,13 @@ export interface NewApiModel extends OpenAI.Models.Model {
 /**
  * Bedrock
  */
+
 export type BedrockSdkParams = {
   modelId: string
   messages: BedrockSdkMessageParam[]
   system?: { text: string }[]
-  inferenceConfig?: {
-    maxTokens?: number
-    temperature?: number
-    topP?: number
-    [key: string]: any
-  }
-  toolConfig?: {
-    tools: BedrockSdkTool[]
-  }
+  inferenceConfig?: InferenceConfiguration
+  toolConfig?: ToolConfiguration
   additionalModelRequestFields?: any
   stream?: boolean
 }
@@ -145,7 +160,18 @@ export type BedrockSdkRawChunk = any
 
 export type BedrockSdkMessageParam = {
   role: string
-  content: { text?: string; image?: any; toolResult?: any }[]
+  content: BedrockSdkContentBlock[]
+}
+
+export type BedrockSdkContentBlock = {
+  text?: string
+  image?: any
+  toolResult?: any
+  toolUse?: {
+    toolUseId?: string
+    name?: string
+    input?: any
+  }
 }
 
 export type BedrockSdkToolCall = {

@@ -1,6 +1,8 @@
 import {
   BedrockRuntimeClient,
+  ContentBlock as BedrockContentBlock,
   ContentBlock,
+  ConversationRole,
   ConverseCommand,
   ConverseStreamCommand
 } from '@aws-sdk/client-bedrock-runtime'
@@ -13,7 +15,6 @@ import {
   EFFORT_RATIO,
   FileTypes,
   GenerateImageParams,
-  isBedrock,
   MCPCallToolResponse,
   MCPTool,
   MCPToolResponse,
@@ -23,6 +24,7 @@ import {
 } from '@renderer/types'
 import { ChunkType, ThinkingDeltaChunk } from '@renderer/types/chunk'
 import { Message } from '@renderer/types/newMessage'
+import { isBedrock } from '@renderer/types/provider'
 import {
   BedrockOptions,
   BedrockSdkInstance,
@@ -157,10 +159,17 @@ export class BedrockAPIClient extends BaseApiClient<
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   override async createCompletions(payload: BedrockSdkParams, options?: BedrockOptions): Promise<BedrockSdkRawOutput> {
     const client = await this.getSdkInstance()
+
+    // Convert BedrockSdkMessageParam[] to BedrockMessage[] for AWS SDK
+    const messages = payload.messages.map((msg) => ({
+      role: msg.role as ConversationRole,
+      content: msg.content as BedrockContentBlock[]
+    }))
+
     if (payload.stream) {
       const command = new ConverseStreamCommand({
         modelId: payload.modelId,
-        messages: payload.messages,
+        messages: messages,
         system: payload.system,
         inferenceConfig: payload.inferenceConfig,
         toolConfig: payload.toolConfig,
@@ -171,7 +180,7 @@ export class BedrockAPIClient extends BaseApiClient<
     } else {
       const command = new ConverseCommand({
         modelId: payload.modelId,
-        messages: payload.messages,
+        messages: messages,
         system: payload.system,
         inferenceConfig: payload.inferenceConfig,
         toolConfig: payload.toolConfig,
@@ -314,13 +323,15 @@ export class BedrockAPIClient extends BaseApiClient<
     // 添加工具调用（如果有）
     if (hasToolCalls) {
       for (const tool of toolCalls!) {
-        assistantMessage.content!.push({
+        // Create the content block with toolUse properly
+        const contentBlock = {
           toolUse: {
             toolUseId: tool.toolUseId,
             name: tool.name,
             input: tool.input
           }
-        })
+        } as BedrockContentBlock
+        assistantMessage.content!.push(contentBlock)
       }
     }
 
@@ -456,7 +467,7 @@ export class BedrockAPIClient extends BaseApiClient<
             if (response.usage) {
               usage = this.extractUsage(response.usage)
             }
-            response.output?.message?.content?.forEach((item) => {
+            response.output?.message?.content?.forEach((item: any) => {
               if (item.text) {
                 controller.enqueue({ type: ChunkType.TEXT_DELTA, text: item.text })
               }
