@@ -1225,7 +1225,8 @@
       "xirang": "天翼クラウド 息壤",
       "yi": "零一万物",
       "zhinao": "360智脳",
-      "zhipu": "智譜AI"
+      "zhipu": "智譜AI",
+      "bedrock": "Amazon Bedrock"
     },
     "restore": {
       "confirm": "データを復元しますか？",
@@ -2333,6 +2334,18 @@
             "private_key_placeholder": "サービスアカウントの秘密鍵を入力してください",
             "title": "サービスアカウント設定"
           }
+        },
+        "bedrock": {
+          "access_key": "アクセスキーID",
+          "access_key_placeholder": "AWSアクセスキーIDを入力してください",
+          "secret_key": "シークレットアクセスキー",
+          "secret_key_placeholder": "AWSシークレットアクセスキーを入力してください",
+          "region": "リージョンを選択してください",
+          "region_placeholder": "リージョンを選択してください",
+          "cross_region": "クロスリージョン",
+          "check": "Claude 3.7を使用してチェックしてください",
+          "check_success": "AWS Bedrockの検証に成功しました",
+          "check_failed": "AWS Bedrockの検証に失敗しました"
         }
       },
       "proxy": {

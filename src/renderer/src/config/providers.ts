@@ -2,6 +2,7 @@ import ZhinaoProviderLogo from '@renderer/assets/images/models/360.png'
 import HunyuanProviderLogo from '@renderer/assets/images/models/hunyuan.png'
 import AzureProviderLogo from '@renderer/assets/images/models/microsoft.png'
 import Ai302ProviderLogo from '@renderer/assets/images/providers/302ai.webp'
+import BedrockProviderLogo from '@renderer/assets/images/providers/bedrock.png'
 import AiHubMixProviderLogo from '@renderer/assets/images/providers/aihubmix.webp'
 import AlayaNewProviderLogo from '@renderer/assets/images/providers/alayanew.webp'
 import AnthropicProviderLogo from '@renderer/assets/images/providers/anthropic.png'
@@ -106,7 +107,8 @@ const PROVIDER_LOGO_MAP = {
   cephalon: CephalonProviderLogo,
   lanyun: LanyunProviderLogo,
   vertexai: VertexAIProviderLogo,
-  'new-api': NewAPIProviderLogo
+  'new-api': NewAPIProviderLogo,
+  bedrock: BedrockProviderLogo
 } as const
 
 export function getProviderLogo(providerId: string) {
@@ -688,6 +690,17 @@ export const PROVIDER_CONFIG = {
     websites: {
       official: 'https://docs.newapi.pro/',
       docs: 'https://docs.newapi.pro'
+    }
+  },
+  bedrock: {
+    api: {
+      url: ''
+    },
+    websites: {
+      official: 'https://aws.amazon.com/cn/bedrock',
+      apiKey: 'https://docs.aws.amazon.com/bedrock/latest/userguide/security-iam.html',
+      docs: 'https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html',
+      models: 'https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html'
     }
   }
 }

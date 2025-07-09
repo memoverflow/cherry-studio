@@ -4,6 +4,7 @@ import { Provider } from '@renderer/types'
 import { AihubmixAPIClient } from './AihubmixAPIClient'
 import { AnthropicAPIClient } from './anthropic/AnthropicAPIClient'
 import { BaseApiClient } from './BaseApiClient'
+import { BedrockAPIClient } from './bedrock/BedrockAPIClient'
 import { GeminiAPIClient } from './gemini/GeminiAPIClient'
 import { VertexAPIClient } from './gemini/VertexAPIClient'
 import { NewAPIClient } from './NewAPIClient'
@@ -64,6 +65,10 @@ export class ApiClientFactory {
         break
       case 'anthropic':
         instance = new AnthropicAPIClient(provider) as BaseApiClient
+        break
+      case 'bedrock':
+        console.log(`[ApiClientFactory] Creating BedrockAPIClient for provider: ${provider.id}`)
+        instance = new BedrockAPIClient(provider) as BaseApiClient
         break
       default:
         logger.debug(`Using default OpenAIApiClient for provider: ${provider.id}`)

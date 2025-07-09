@@ -20,24 +20,27 @@ import {
 } from '@google/genai'
 import OpenAI, { AzureOpenAI } from 'openai'
 import { Stream } from 'openai/streaming'
+import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime'
 
 import { EndpointType } from './index'
 
-export type SdkInstance = OpenAI | AzureOpenAI | Anthropic | GoogleGenAI
-export type SdkParams = OpenAISdkParams | OpenAIResponseSdkParams | AnthropicSdkParams | GeminiSdkParams
-export type SdkRawChunk = OpenAISdkRawChunk | OpenAIResponseSdkRawChunk | AnthropicSdkRawChunk | GeminiSdkRawChunk
-export type SdkRawOutput = OpenAISdkRawOutput | OpenAIResponseSdkRawOutput | AnthropicSdkRawOutput | GeminiSdkRawOutput
+export type SdkInstance = OpenAI | AzureOpenAI | Anthropic | GoogleGenAI | BedrockRuntimeClient
+export type SdkParams = OpenAISdkParams | OpenAIResponseSdkParams | AnthropicSdkParams | GeminiSdkParams | BedrockSdkParams
+export type SdkRawChunk = OpenAISdkRawChunk | OpenAIResponseSdkRawChunk | AnthropicSdkRawChunk | GeminiSdkRawChunk | BedrockSdkRawChunk
+export type SdkRawOutput = OpenAISdkRawOutput | OpenAIResponseSdkRawOutput | AnthropicSdkRawOutput | GeminiSdkRawOutput | BedrockSdkRawOutput
 export type SdkMessageParam =
   | OpenAISdkMessageParam
   | OpenAIResponseSdkMessageParam
   | AnthropicSdkMessageParam
   | GeminiSdkMessageParam
+  | BedrockSdkMessageParam
 export type SdkToolCall =
   | OpenAI.Chat.Completions.ChatCompletionMessageToolCall
   | ToolUseBlock
   | FunctionCall
   | OpenAIResponseSdkToolCall
-export type SdkTool = OpenAI.Chat.Completions.ChatCompletionTool | ToolUnion | Tool | OpenAIResponseSdkTool
+  | BedrockSdkToolCall
+export type SdkTool = OpenAI.Chat.Completions.ChatCompletionTool | ToolUnion | Tool | OpenAIResponseSdkTool | BedrockSdkTool
 export type SdkModel = OpenAI.Models.Model | Anthropic.ModelInfo | GeminiModel | NewApiModel
 
 export type RequestOptions = Anthropic.RequestOptions | OpenAI.RequestOptions | GeminiOptions
@@ -115,4 +118,47 @@ export type GeminiOptions = {
  */
 export interface NewApiModel extends OpenAI.Models.Model {
   supported_endpoint_types?: EndpointType[]
+}
+
+/**
+ * Bedrock
+ */
+export type BedrockSdkParams = {
+  modelId: string
+  messages: BedrockSdkMessageParam[]
+  system?: { text: string }[]
+  inferenceConfig?: {
+    maxTokens?: number
+    temperature?: number
+    topP?: number
+    [key: string]: any
+  }
+  toolConfig?: {
+    tools: BedrockSdkTool[]
+  }
+  additionalModelRequestFields?: any
+  stream?: boolean
+}
+
+export type BedrockSdkRawOutput = AsyncIterable<any> | any
+export type BedrockSdkRawChunk = any
+
+export type BedrockSdkMessageParam = {
+  role: string
+  content: { text?: string; image?: any; toolResult?: any }[]
+}
+
+export type BedrockSdkToolCall = {
+  toolUseId: string
+  name: string
+  input: any
+  type: string
+}
+
+export type BedrockSdkTool = any
+
+export type BedrockOptions = {
+  streamOutput: boolean
+  signal?: AbortSignal
+  timeout?: number
 }

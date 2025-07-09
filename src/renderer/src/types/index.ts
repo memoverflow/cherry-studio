@@ -180,6 +180,7 @@ export type ProviderType =
   | 'azure-openai'
   | 'vertexai'
   | 'mistral'
+  | 'bedrock'
 
 export type ModelType = 'text' | 'vision' | 'embedding' | 'reasoning' | 'function_calling' | 'web_search'
 

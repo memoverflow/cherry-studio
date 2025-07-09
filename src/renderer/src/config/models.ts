@@ -8,6 +8,7 @@ import AimassModelLogo from '@renderer/assets/images/models/aimass.png'
 import AimassModelLogoDark from '@renderer/assets/images/models/aimass_dark.png'
 import AisingaporeModelLogo from '@renderer/assets/images/models/aisingapore.png'
 import AisingaporeModelLogoDark from '@renderer/assets/images/models/aisingapore_dark.png'
+import NovaLogo from '@renderer/assets/images/models/amazon-nova.png'
 import BaichuanModelLogo from '@renderer/assets/images/models/baichuan.png'
 import BaichuanModelLogoDark from '@renderer/assets/images/models/baichuan_dark.png'
 import BgeModelLogo from '@renderer/assets/images/models/bge.webp'
@@ -408,7 +409,8 @@ export function getModelLogo(modelId: string) {
     'bge-': BgeModelLogo,
     'voyage-': VoyageModelLogo,
     tokenflux: isLight ? TokenFluxModelLogo : TokenFluxModelLogoDark,
-    'nomic-': NomicLogo
+    'nomic-': NomicLogo,
+    nova: NovaLogo
   }
 
   for (const key in logoMap) {

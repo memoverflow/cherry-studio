@@ -1225,7 +1225,8 @@
       "xirang": "State Cloud Xirang",
       "yi": "Yi",
       "zhinao": "360AI",
-      "zhipu": "ZHIPU AI"
+      "zhipu": "ZHIPU AI",
+      "bedrock": "Amazon Bedrock"
     },
     "restore": {
       "confirm": "Вы уверены, что хотите восстановить данные?",
@@ -2333,6 +2334,18 @@
             "private_key_placeholder": "Введите приватный ключ Service Account",
             "title": "Конфигурация Service Account"
           }
+        },
+        "bedrock": {
+            "access_key": "Идентификатор ключа доступа",
+            "access_key_placeholder": "Введите идентификатор ключа доступа AWS",
+            "secret_key": "Секретный ключ доступа",
+            "secret_key_placeholder": "Введите ваш секретный ключ доступа AWS",
+            "region": "Выберите регион",
+            "region_placeholder": "Выберите регион",
+            "cross_region": "Межрегиональный",
+            "check":"Проверка с помощью Claude 3.7",
+            "check_success": "Проверка AWS Bedrock прошла успешно",
+            "check_failed": "Проверка AWS Bedrock не прошла"
         }
       },
       "proxy": {
