@@ -4,6 +4,7 @@ import type OpenAI from 'openai'
 import type { CSSProperties } from 'react'
 
 export * from './file'
+export * from './provider'
 import type { FileMetadata } from './file'
 import type { Message } from './newMessage'
 
@@ -164,6 +165,11 @@ export type Provider = {
   isVertex?: boolean
   notes?: string
   extra_headers?: Record<string, string>
+  // AWS Bedrock specific fields
+  region?: string
+  accessKey?: string
+  secretKey?: string
+  crossRegion?: boolean
 }
 
 export type ProviderType =
