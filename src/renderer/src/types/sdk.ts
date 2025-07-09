@@ -21,6 +21,7 @@ import {
 } from '@google/genai'
 import OpenAI, { AzureOpenAI } from 'openai'
 import { Stream } from 'openai/streaming'
+import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime'
 
 import { EndpointType } from './index'
 
