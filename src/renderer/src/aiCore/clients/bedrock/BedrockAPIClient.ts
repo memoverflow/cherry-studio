@@ -494,16 +494,13 @@ export class BedrockAPIClient extends BaseApiClient<
               })
               console.log('completedToolCalls', completedToolCalls)
               controller.enqueue({ type: ChunkType.MCP_TOOL_CREATED, tool_calls: completedToolCalls })
-
-              // 当stopReason为tool_use时，不发送LLM_RESPONSE_COMPLETE
-              // 让工具调用完成后继续处理
-            } else {
-              // 只有在不是工具调用时，才发送完成信号
-              controller.enqueue({
-                type: ChunkType.LLM_RESPONSE_COMPLETE,
-                response: { usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }
-              })
             }
+            
+            // 始终发送完成信号，与其他客户端保持一致
+            controller.enqueue({
+              type: ChunkType.LLM_RESPONSE_COMPLETE,
+              response: { usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }
+            })
           } else {
             // Handle streaming chunks by checking for the presence of specific keys
             const streamChunk = chunk as any
@@ -552,16 +549,13 @@ export class BedrockAPIClient extends BaseApiClient<
                 })
                 console.log('completedToolCalls in stream', completedToolCalls)
                 controller.enqueue({ type: ChunkType.MCP_TOOL_CREATED, tool_calls: completedToolCalls })
-
-                // 当stopReason为tool_use时，不发送LLM_RESPONSE_COMPLETE
-                // 让工具调用完成后继续处理
-              } else {
-                // 只有在不是工具调用时，才发送完成信号
-                controller.enqueue({
-                  type: ChunkType.LLM_RESPONSE_COMPLETE,
-                  response: { usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }
-                })
               }
+              
+              // 始终发送完成信号，与其他客户端保持一致
+              controller.enqueue({
+                type: ChunkType.LLM_RESPONSE_COMPLETE,
+                response: { usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }
+              })
             }
           }
         }
