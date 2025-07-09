@@ -1225,7 +1225,8 @@
       "xirang": "天翼云息壤",
       "yi": "零一万物",
       "zhinao": "360 智脑",
-      "zhipu": "智谱 AI"
+      "zhipu": "智谱 AI",
+      "bedrock": "Amazon Bedrock"
     },
     "restore": {
       "confirm": "确定要恢复数据吗？",
@@ -2333,6 +2334,18 @@
             "private_key_placeholder": "请输入 Service Account 私钥",
             "title": "Service Account 配置"
           }
+        },
+        "bedrock": {
+          "access_key": "访问密钥 ID",
+          "access_key_placeholder": "输入您的 AWS 访问密钥 ID",
+          "secret_key": "秘密访问密钥",
+          "secret_key_placeholder": "输入您的 AWS 秘密访问密钥",
+          "region": "选择区域",
+          "region_placeholder": "选择区域",
+          "cross_region": "跨区域",
+          "check":"使用 Claude 3.7 进行检查",
+          "check_success": "AWS Bedrock 验证成功",
+          "check_failed": "AWS Bedrock 验证失败"
         }
       },
       "proxy": {

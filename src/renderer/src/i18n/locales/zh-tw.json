@@ -1225,7 +1225,8 @@
       "xirang": "天翼雲息壤",
       "yi": "零一萬物",
       "zhinao": "360 智腦",
-      "zhipu": "智譜 AI"
+      "zhipu": "智譜 AI",
+      "bedrock": "Amazon Bedrock"
     },
     "restore": {
       "confirm": "確定要復原資料嗎？",
@@ -2333,6 +2334,18 @@
             "private_key_placeholder": "輸入服務帳戶私密金鑰",
             "title": "服務帳戶設定"
           }
+        },
+        "bedrock": {
+          "access_key": "存取金鑰 ID",
+          "access_key_placeholder": "輸入您的 AWS 存取金鑰 ID",
+          "secret_key": "秘密存取金鑰",
+          "secret_key_placeholder": "輸入您的 AWS 秘密存取金鑰",
+          "region": "選擇區域",
+          "region_placeholder": "選擇區域",
+          "cross_region": "跨區域",
+          "check":"使用 Claude 3.7 進行檢查",
+          "check_success": "AWS Bedrock 驗證成功",
+          "check_failed": "AWS Bedrock 驗證失敗"
         }
       },
       "proxy": {
