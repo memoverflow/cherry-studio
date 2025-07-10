@@ -24,7 +24,6 @@ import {
 } from '@renderer/types'
 import { ChunkType, ThinkingDeltaChunk } from '@renderer/types/chunk'
 import { Message } from '@renderer/types/newMessage'
-import { isBedrock } from '@renderer/types/provider'
 import {
   BedrockSdkInstance,
   BedrockSdkMessageParam,
@@ -59,7 +58,6 @@ export class BedrockAPIClient extends BaseApiClient<
 > {
   private static readonly DEFAULT_REGION = 'us-east-1'
   private static readonly MIN_BUDGET_TOKENS = 1024
-  private static readonly THINKING_TAG_REGEX = /<thinking>(.*?)<\/thinking>/s
 
   private client?: BedrockRuntimeClient
 
@@ -130,7 +128,7 @@ export class BedrockAPIClient extends BaseApiClient<
    * 创建 Bedrock 客户端实例
    */
   private createBedrockClient(): BedrockRuntimeClient {
-    if (!isBedrock(this.provider)) {
+    if (this.provider.type !== 'bedrock') {
       throw new Error('提供商不是 Bedrock 提供商')
     }
 
@@ -147,7 +145,8 @@ export class BedrockAPIClient extends BaseApiClient<
    * 获取模型 ID（支持跨区域模型）
    */
   private getModelId(model: Model): string {
-    if (!isBedrock(this.provider)) {
+    console.log('this.provider', this.provider)
+    if (this.provider.type !== 'bedrock') {
       return model.id
     }
     return this.provider.crossRegion ? `us.${model.id}` : model.id
@@ -682,23 +681,7 @@ export class BedrockAPIClient extends BaseApiClient<
    * 处理文本增量
    */
   private handleTextDelta(text: string, controller: TransformStreamDefaultController<GenericChunk>) {
-    const thinkingMatch = text.match(BedrockAPIClient.THINKING_TAG_REGEX)
-
-    if (thinkingMatch) {
-      // 提取思考内容并发送为思考增量
-      controller.enqueue({
-        type: ChunkType.THINKING_DELTA,
-        text: thinkingMatch[1]
-      } as ThinkingDeltaChunk)
-
-      // 移除思考标签并发送剩余内容
-      const cleanText = text.replace(BedrockAPIClient.THINKING_TAG_REGEX, '').trim()
-      if (cleanText) {
-        controller.enqueue({ type: ChunkType.TEXT_DELTA, text: cleanText })
-      }
-    } else {
-      controller.enqueue({ type: ChunkType.TEXT_DELTA, text })
-    }
+    controller.enqueue({ type: ChunkType.TEXT_DELTA, text })
   }
 
   /**
@@ -751,6 +734,7 @@ export class BedrockAPIClient extends BaseApiClient<
       const completedToolCalls = this.parseToolCalls(toolCalls)
       controller.enqueue({ type: ChunkType.MCP_TOOL_CREATED, tool_calls: completedToolCalls })
     } else {
+      // 发送响应完成信号，让 TextChunkMiddleware 处理文本完成
       this.sendUsageMetrics(controller, usage)
     }
   }

@@ -13,7 +13,6 @@ import i18n from '@renderer/i18n'
 import { checkApi } from '@renderer/services/ApiService'
 import { checkModelsHealth, getModelCheckSummary } from '@renderer/services/HealthCheckService'
 import { isProviderSupportAuth } from '@renderer/services/ProviderService'
-import { isBedrock } from '@renderer/types'
 import {
   formatApiHost,
   formatApiKeys,
@@ -67,11 +66,11 @@ const ProviderSetting: FC<Props> = ({ providerId }) => {
   const deferredModelSearchText = useDeferredValue(modelSearchText)
   const { t } = useTranslation()
   const { theme } = useTheme()
-  const isBedrockProvider = isBedrock(provider)
-  const [accessKey, setAccesskey] = useState<string>(isBedrock(provider) ? provider.accessKey || '' : '')
-  const [secretKey, setSecretKey] = useState<string>(isBedrock(provider) ? provider.secretKey || '' : '')
-  const [selectedRegion, setSelectedRegion] = useState<string>(isBedrock(provider) ? provider.region || '' : '')
-  const [crossRegion, setCrossRegion] = useState(isBedrock(provider) ? (provider.crossRegion ?? true) : true)
+  const isBedrockProvider = provider.type === 'bedrock'
+  const [accessKey, setAccesskey] = useState<string>(isBedrockProvider ? provider.accessKey || '' : '')
+  const [secretKey, setSecretKey] = useState<string>(isBedrockProvider ? provider.secretKey || '' : '')
+  const [selectedRegion, setSelectedRegion] = useState<string>(isBedrockProvider ? provider.region || '' : '')
+  const [crossRegion, setCrossRegion] = useState(isBedrockProvider ? (provider.crossRegion ?? true) : true)
   const [bedrockChecking, setBedrockChecking] = useState(false)
   const [bedrockValid, setBedrockValid] = useState(false)
 
@@ -330,9 +329,15 @@ const ProviderSetting: FC<Props> = ({ providerId }) => {
       setAccesskey(provider.accessKey || '')
       setSecretKey(provider.secretKey || '')
       setSelectedRegion(provider.region || '')
-      setCrossRegion(provider.crossRegion ?? true)
+      const defaultCrossRegion = provider.crossRegion ?? true
+      setCrossRegion(defaultCrossRegion)
+
+      // 如果 crossRegion 未定义，设置默认值到 provider
+      if (provider.crossRegion === undefined) {
+        updateProvider({ ...provider, crossRegion: defaultCrossRegion })
+      }
     }
-  }, [provider, isBedrockProvider])
+  }, [provider, isBedrockProvider, updateProvider])
 
   useEffect(() => {
     if (provider.id === 'copilot') {
@@ -477,7 +482,7 @@ const ProviderSetting: FC<Props> = ({ providerId }) => {
               checked={crossRegion}
               onChange={(value) => {
                 setCrossRegion(value)
-                if (isBedrock(provider)) {
+                if (isBedrockProvider) {
                   updateProvider({ ...provider, crossRegion: value })
                 }
               }}
