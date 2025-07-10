@@ -22,7 +22,7 @@ import {
   Provider,
   ToolCallResponse
 } from '@renderer/types'
-import { ChunkType, ThinkingDeltaChunk } from '@renderer/types/chunk'
+import { ChunkType, TextStartChunk, ThinkingDeltaChunk, ThinkingStartChunk } from '@renderer/types/chunk'
 import { Message } from '@renderer/types/newMessage'
 import {
   BedrockSdkInstance,
@@ -44,6 +44,356 @@ import { BaseApiClient } from '../BaseApiClient'
 import { RequestTransformer, ResponseChunkTransformer } from '../types'
 
 /**
+ * Bedrock流处理状态管理
+ */
+class StreamState {
+  hasStartedText = false
+  hasStartedThinking = false
+  stopReason?: string
+  usage?: any
+  toolCalls: BedrockSdkToolCall[] = []
+  thinkingContent = ''
+
+  reset() {
+    this.hasStartedText = false
+    this.hasStartedThinking = false
+    this.stopReason = undefined
+    this.usage = undefined
+    this.toolCalls = []
+    this.thinkingContent = ''
+  }
+}
+
+/**
+ * 统一的Chunk处理器接口
+ */
+interface ChunkHandler {
+  canHandle(chunk: any): boolean
+  handle(chunk: any, state: StreamState, controller: TransformStreamDefaultController<GenericChunk>): boolean
+}
+
+/**
+ * 消息开始处理器
+ */
+class MessageStartHandler implements ChunkHandler {
+  canHandle(chunk: any): boolean {
+    return 'messageStart' in chunk
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  handle(_chunk: any, state: StreamState, _controller: TransformStreamDefaultController<GenericChunk>): boolean {
+    // 消息开始时重置状态
+    state.reset()
+    return true
+  }
+}
+
+/**
+ * 内容增量处理器 - 处理文本、思考和工具内容
+ */
+class ContentDeltaHandler implements ChunkHandler {
+  canHandle(chunk: any): boolean {
+    return 'contentBlockDelta' in chunk
+  }
+
+  handle(chunk: any, state: StreamState, controller: TransformStreamDefaultController<GenericChunk>): boolean {
+    const delta = chunk.contentBlockDelta?.delta
+    if (!delta) return false
+
+    let handled = false
+
+    // 处理文本内容
+    if (delta.text) {
+      this.handleTextDelta(delta.text, state, controller)
+      handled = true
+    }
+
+    // 处理思考内容
+    if (delta.reasoningContent?.text) {
+      this.handleReasoningDelta(delta.reasoningContent.text, state, controller)
+      handled = true
+    }
+
+    // 处理工具输入
+    if (delta.toolUse?.input && state.toolCalls.length > 0) {
+      this.handleToolInputDelta(delta.toolUse.input, state)
+      handled = true
+    }
+
+    return handled
+  }
+
+  private handleTextDelta(
+    text: string,
+    state: StreamState,
+    controller: TransformStreamDefaultController<GenericChunk>
+  ) {
+    if (!state.hasStartedText) {
+      controller.enqueue({ type: ChunkType.TEXT_START } as TextStartChunk)
+      state.hasStartedText = true
+    }
+    controller.enqueue({ type: ChunkType.TEXT_DELTA, text })
+  }
+
+  private handleReasoningDelta(
+    text: string,
+    state: StreamState,
+    controller: TransformStreamDefaultController<GenericChunk>
+  ) {
+    if (!state.hasStartedThinking) {
+      controller.enqueue({ type: ChunkType.THINKING_START } as ThinkingStartChunk)
+      state.hasStartedThinking = true
+      // 重置 thinking 内容
+      state.thinkingContent = ''
+    }
+    // 累积 thinking 内容
+    state.thinkingContent += text
+    controller.enqueue({
+      type: ChunkType.THINKING_DELTA,
+      text
+    } as ThinkingDeltaChunk)
+  }
+
+  private handleToolInputDelta(input: string, state: StreamState) {
+    if (state.toolCalls.length > 0) {
+      state.toolCalls[state.toolCalls.length - 1].input += input
+    }
+  }
+}
+
+/**
+ * 工具使用开始处理器
+ */
+class ToolUseStartHandler implements ChunkHandler {
+  canHandle(chunk: any): boolean {
+    return chunk.contentBlockStart?.start?.toolUse
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  handle(chunk: any, state: StreamState, _controller: TransformStreamDefaultController<GenericChunk>): boolean {
+    try {
+      const { toolUseId, name } = chunk.contentBlockStart.start.toolUse
+      state.toolCalls.push({
+        toolUseId: toolUseId || '',
+        name: name || '',
+        input: '',
+        type: 'tool_use'
+      })
+      return true
+    } catch (error) {
+      console.warn('[BedrockAPI] Error handling tool use start:', error)
+      return false
+    }
+  }
+}
+
+/**
+ * 内容块停止处理器
+ */
+class ContentBlockStopHandler implements ChunkHandler {
+  canHandle(chunk: any): boolean {
+    return 'contentBlockStop' in chunk
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  handle(_chunk: any, _state: StreamState, _controller: TransformStreamDefaultController<GenericChunk>): boolean {
+    // 内容块停止 - 仅做日志记录，无需特殊处理
+    return true
+  }
+}
+
+/**
+ * 消息停止处理器
+ */
+class MessageStopHandler implements ChunkHandler {
+  canHandle(chunk: any): boolean {
+    return 'messageStop' in chunk
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  handle(chunk: any, state: StreamState, _controller: TransformStreamDefaultController<GenericChunk>): boolean {
+    state.stopReason = chunk.messageStop?.stopReason
+    return true
+  }
+}
+
+/**
+ * 元数据处理器 - 最终处理完成逻辑
+ */
+class MetadataHandler implements ChunkHandler {
+  private client: BedrockAPIClient
+
+  constructor(client: BedrockAPIClient) {
+    this.client = client
+  }
+
+  canHandle(chunk: any): boolean {
+    return 'metadata' in chunk && chunk.metadata?.usage
+  }
+
+  handle(chunk: any, state: StreamState, controller: TransformStreamDefaultController<GenericChunk>): boolean {
+    state.usage = chunk.metadata
+
+    // **关键**: 保存 thinking 内容到 client 实例
+    if (state.thinkingContent.trim()) {
+      ;(this.client as any).lastThinkingContent = state.thinkingContent.trim()
+    }
+
+    this.processCompletion(state, controller)
+    return true
+  }
+
+  private processCompletion(state: StreamState, controller: TransformStreamDefaultController<GenericChunk>) {
+    if (state.stopReason === 'tool_use' && state.toolCalls.length > 0) {
+      const completedToolCalls = this.parseToolCalls(state.toolCalls)
+      controller.enqueue({ type: ChunkType.MCP_TOOL_CREATED, tool_calls: completedToolCalls })
+    } else if (state.usage) {
+      this.sendUsageMetrics(controller, state.usage)
+    }
+  }
+
+  private parseToolCalls(toolCalls: BedrockSdkToolCall[]): BedrockSdkToolCall[] {
+    return toolCalls.map((tc) => {
+      try {
+        const parsedInput = typeof tc.input === 'string' && tc.input ? JSON.parse(tc.input) : tc.input
+        return { ...tc, input: parsedInput || {} }
+      } catch (e) {
+        console.error('[BedrockAPI] Error parsing tool call input:', tc.input, e)
+        return { ...tc, input: {} }
+      }
+    })
+  }
+
+  private sendUsageMetrics(controller: TransformStreamDefaultController<GenericChunk>, usage: any) {
+    controller.enqueue({
+      type: ChunkType.LLM_RESPONSE_COMPLETE,
+      response: {
+        usage: {
+          prompt_tokens: usage?.usage?.inputTokens || 0,
+          completion_tokens: usage?.usage?.outputTokens || 0,
+          total_tokens: usage?.usage?.totalTokens || 0
+        }
+      }
+    })
+  }
+}
+
+/**
+ * 非流式响应处理器
+ */
+class NonStreamHandler implements ChunkHandler {
+  canHandle(chunk: any): boolean {
+    return 'output' in chunk
+  }
+
+  handle(chunk: any, state: StreamState, controller: TransformStreamDefaultController<GenericChunk>): boolean {
+    if (chunk.usage) {
+      state.usage = chunk.usage
+    }
+
+    let hasContent = false
+    chunk.output?.message?.content?.forEach((item: any) => {
+      if (item.text) {
+        if (!state.hasStartedText) {
+          controller.enqueue({ type: ChunkType.TEXT_START } as TextStartChunk)
+          state.hasStartedText = true
+        }
+        controller.enqueue({ type: ChunkType.TEXT_DELTA, text: item.text })
+        hasContent = true
+      }
+
+      if (item.toolUse) {
+        state.toolCalls.push({
+          toolUseId: item.toolUseId || '',
+          name: item.toolUse.name || '',
+          input: item.toolUse.input || {},
+          type: 'tool_use'
+        })
+        hasContent = true
+      }
+    })
+
+    if (hasContent) {
+      state.stopReason = chunk.stopReason
+      this.processCompletion(state, controller)
+    }
+
+    return hasContent
+  }
+
+  private processCompletion(state: StreamState, controller: TransformStreamDefaultController<GenericChunk>) {
+    if (state.stopReason === 'tool_use' && state.toolCalls.length > 0) {
+      const completedToolCalls = this.parseToolCalls(state.toolCalls)
+      controller.enqueue({ type: ChunkType.MCP_TOOL_CREATED, tool_calls: completedToolCalls })
+    } else if (state.usage) {
+      this.sendUsageMetrics(controller, state.usage)
+    }
+  }
+
+  private parseToolCalls(toolCalls: BedrockSdkToolCall[]): BedrockSdkToolCall[] {
+    return toolCalls.map((tc) => {
+      try {
+        const parsedInput = typeof tc.input === 'string' && tc.input ? JSON.parse(tc.input) : tc.input
+        return { ...tc, input: parsedInput || {} }
+      } catch (e) {
+        console.error('[BedrockAPI] Error parsing tool call input:', tc.input, e)
+        return { ...tc, input: {} }
+      }
+    })
+  }
+
+  private sendUsageMetrics(controller: TransformStreamDefaultController<GenericChunk>, usage: any) {
+    controller.enqueue({
+      type: ChunkType.LLM_RESPONSE_COMPLETE,
+      response: {
+        usage: {
+          prompt_tokens: usage?.usage?.inputTokens || 0,
+          completion_tokens: usage?.usage?.outputTokens || 0,
+          total_tokens: usage?.usage?.totalTokens || 0
+        }
+      }
+    })
+  }
+}
+
+/**
+ * 统一的Chunk处理管道
+ */
+class ChunkProcessor {
+  private handlers: ChunkHandler[]
+
+  constructor(client: BedrockAPIClient) {
+    this.handlers = [
+      new MessageStartHandler(),
+      new ToolUseStartHandler(),
+      new ContentDeltaHandler(),
+      new ContentBlockStopHandler(),
+      new MessageStopHandler(),
+      new MetadataHandler(client),
+      new NonStreamHandler()
+    ]
+  }
+
+  process(
+    chunk: BedrockSdkRawChunk,
+    state: StreamState,
+    controller: TransformStreamDefaultController<GenericChunk>
+  ): boolean {
+    if (!chunk) {
+      console.warn('[BedrockAPI] Received empty chunk')
+      return false
+    }
+
+    for (const handler of this.handlers) {
+      if (handler.canHandle(chunk)) {
+        return handler.handle(chunk, state, controller)
+      }
+    }
+
+    console.warn('[BedrockAPI] No handler found for chunk:', chunk)
+    return false
+  }
+}
+
+/**
  * Amazon Bedrock API 客户端
  * 负责处理与 Amazon Bedrock 服务的所有交互，包括消息转换、工具调用和流响应处理
  */
@@ -60,6 +410,8 @@ export class BedrockAPIClient extends BaseApiClient<
   private static readonly MIN_BUDGET_TOKENS = 1024
 
   private client?: BedrockRuntimeClient
+  // 保存最近一次响应的 thinking 内容，用于递归工具调用
+  private lastThinkingContent = ''
 
   constructor(provider: Provider) {
     super(provider)
@@ -394,7 +746,7 @@ export class BedrockAPIClient extends BaseApiClient<
   }
 
   /**
-   * 构建 SDK 消息列表
+   * 构建 SDK 消息列表 - 修复 thinking 模式下的消息结构
    */
   override buildSdkMessages(
     currentReqMessages: BedrockSdkMessageParam[],
@@ -406,6 +758,33 @@ export class BedrockAPIClient extends BaseApiClient<
     const hasToolCalls = toolCalls && toolCalls.length > 0
 
     const assistantMessage = this.createAssistantMessage(output, toolCalls, hasTextOutput, hasToolCalls || false)
+
+    // **核心修复**: 如果有 tool_use 但没有 thinking 内容，则在最前面添加 thinking 块
+    if (hasToolCalls && assistantMessage.content && assistantMessage.content.length > 0) {
+      const hasThinking = assistantMessage.content.some(
+        (block) =>
+          'text' in block &&
+          block.text &&
+          (block.text.includes('<thinking>') || block.text.toLowerCase().includes('think'))
+      )
+
+      const hasToolUse = assistantMessage.content.some((block) => 'toolUse' in block)
+
+      // 如果有 tool_use 但没有 thinking 内容，添加保存的或默认的 thinking 块
+      if (hasToolUse && !hasThinking) {
+        const thinkingText = this.lastThinkingContent
+          ? `<thinking>\n${this.lastThinkingContent}\n</thinking>`
+          : '<thinking>\nI need to use tools to help with this task. Let me proceed with the tool calls.\n</thinking>'
+
+        assistantMessage.content.unshift({
+          text: thinkingText
+        })
+
+        // 清空已使用的 thinking 内容
+        this.lastThinkingContent = ''
+      }
+    }
+
     let result = [...currentReqMessages]
 
     if (assistantMessage.content!.length > 0) {
@@ -420,7 +799,7 @@ export class BedrockAPIClient extends BaseApiClient<
   }
 
   /**
-   * 创建助手消息
+   * 创建助手消息 - 简化版本
    */
   private createAssistantMessage(
     output: BedrockSdkRawOutput | string | undefined,
@@ -433,10 +812,12 @@ export class BedrockAPIClient extends BaseApiClient<
       content: []
     }
 
+    // 添加文本内容
     if (hasTextOutput) {
       assistantMessage.content!.push({ text: output as string })
     }
 
+    // 添加工具调用
     if (hasToolCalls && toolCalls) {
       for (const tool of toolCalls) {
         const contentBlock = {
@@ -511,6 +892,7 @@ export class BedrockAPIClient extends BaseApiClient<
           stream: streamOutput
         }
 
+        console.log('sdkParams', sdkParams)
         const timeout = this.getTimeout(model)
         return { payload: sdkParams, messages: reqMessages, metadata: { timeout } }
       }
@@ -550,207 +932,18 @@ export class BedrockAPIClient extends BaseApiClient<
   }
 
   /**
-   * 获取响应块转换器
+   * 获取响应块转换器 - 使用新的handler架构
    */
   getResponseChunkTransformer(): ResponseChunkTransformer<BedrockSdkRawChunk> {
     return () => {
-      const toolCalls: BedrockSdkToolCall[] = []
-      const usageContainer = { current: null as any }
+      const state = new StreamState()
+      const processor = new ChunkProcessor(this)
 
       return {
         transform: (chunk: BedrockSdkRawChunk, controller: TransformStreamDefaultController<GenericChunk>) => {
-          if (!chunk) {
-            console.warn('从 Bedrock API 接收到空块')
-            return
-          }
-
-          if ('output' in chunk) {
-            this.handleNonStreamingChunk(chunk, controller, toolCalls, usageContainer)
-          } else {
-            this.handleStreamingChunk(chunk, controller, toolCalls, usageContainer)
-          }
+          processor.process(chunk, state, controller)
         }
       }
     }
-  }
-
-  /**
-   * 处理非流式响应块
-   */
-  private handleNonStreamingChunk(
-    chunk: any,
-    controller: TransformStreamDefaultController<GenericChunk>,
-    toolCalls: BedrockSdkToolCall[],
-    usageContainer: { current: any }
-  ) {
-    if (chunk.usage) {
-      usageContainer.current = chunk.usage
-    }
-
-    chunk.output?.message?.content?.forEach((item: any) => {
-      if (item.text) {
-        controller.enqueue({ type: ChunkType.TEXT_DELTA, text: item.text })
-      }
-      if (item.toolUse) {
-        toolCalls.push({
-          toolUseId: item.toolUse.toolUseId || '',
-          name: item.toolUse.name || '',
-          input: item.toolUse.input || {},
-          type: 'tool_use'
-        })
-      }
-    })
-
-    this.handleResponseCompletion(chunk.stopReason, controller, toolCalls, usageContainer.current)
-  }
-
-  /**
-   * 处理流式响应块
-   */
-  private handleStreamingChunk(
-    chunk: any,
-    controller: TransformStreamDefaultController<GenericChunk>,
-    toolCalls: BedrockSdkToolCall[],
-    usageContainer: { current: any }
-  ) {
-    const streamChunk = chunk as any
-
-    // 处理工具使用开始
-    if (streamChunk.contentBlockStart?.start?.toolUse) {
-      this.handleToolUseStart(streamChunk, toolCalls)
-    }
-
-    // 处理内容增量
-    if (streamChunk.contentBlockDelta?.delta) {
-      this.handleContentDelta(streamChunk, controller, toolCalls)
-    }
-
-    // 处理使用情况元数据
-    if (streamChunk.metadata?.usage) {
-      usageContainer.current = streamChunk.metadata
-      this.sendUsageMetrics(controller, usageContainer.current)
-    }
-
-    // 处理消息停止
-    if (streamChunk.messageStop?.stopReason) {
-      this.handleResponseCompletion(streamChunk.messageStop.stopReason, controller, toolCalls, usageContainer.current)
-    }
-  }
-
-  /**
-   * 处理工具使用开始
-   */
-  private handleToolUseStart(streamChunk: any, toolCalls: BedrockSdkToolCall[]) {
-    try {
-      const { toolUseId, name } = streamChunk.contentBlockStart.start.toolUse
-      toolCalls.push({
-        toolUseId: toolUseId || '',
-        name: name || '',
-        input: '',
-        type: 'tool_use'
-      })
-    } catch (error) {
-      console.warn('处理工具使用开始时出错:', error)
-    }
-  }
-
-  /**
-   * 处理内容增量
-   */
-  private handleContentDelta(
-    streamChunk: any,
-    controller: TransformStreamDefaultController<GenericChunk>,
-    toolCalls: BedrockSdkToolCall[]
-  ) {
-    const delta = streamChunk.contentBlockDelta.delta
-
-    if (delta.text) {
-      this.handleTextDelta(delta.text, controller)
-    }
-
-    if (delta.toolUse?.input && toolCalls.length > 0) {
-      this.handleToolInputDelta(delta.toolUse.input, toolCalls)
-    }
-
-    if (delta.reasoningContent?.text) {
-      this.handleReasoningDelta(delta.reasoningContent.text, controller)
-    }
-  }
-
-  /**
-   * 处理文本增量
-   */
-  private handleTextDelta(text: string, controller: TransformStreamDefaultController<GenericChunk>) {
-    controller.enqueue({ type: ChunkType.TEXT_DELTA, text })
-  }
-
-  /**
-   * 处理工具输入增量
-   */
-  private handleToolInputDelta(input: string, toolCalls: BedrockSdkToolCall[]) {
-    try {
-      toolCalls[toolCalls.length - 1].input += input
-    } catch (error) {
-      console.warn('处理工具输入时出错:', error)
-    }
-  }
-
-  /**
-   * 处理推理增量
-   */
-  private handleReasoningDelta(text: string, controller: TransformStreamDefaultController<GenericChunk>) {
-    controller.enqueue({
-      type: ChunkType.THINKING_DELTA,
-      text
-    } as ThinkingDeltaChunk)
-  }
-
-  /**
-   * 发送使用情况指标
-   */
-  private sendUsageMetrics(controller: TransformStreamDefaultController<GenericChunk>, usage: any) {
-    controller.enqueue({
-      type: ChunkType.LLM_RESPONSE_COMPLETE,
-      response: {
-        usage: {
-          prompt_tokens: usage?.usage?.inputTokens || 0,
-          completion_tokens: usage?.usage?.outputTokens || 0,
-          total_tokens: usage?.usage?.totalTokens || 0
-        }
-      }
-    })
-  }
-
-  /**
-   * 处理响应完成
-   */
-  private handleResponseCompletion(
-    stopReason: string,
-    controller: TransformStreamDefaultController<GenericChunk>,
-    toolCalls: BedrockSdkToolCall[],
-    usage: any
-  ) {
-    if (stopReason === 'tool_use' && toolCalls.length > 0) {
-      const completedToolCalls = this.parseToolCalls(toolCalls)
-      controller.enqueue({ type: ChunkType.MCP_TOOL_CREATED, tool_calls: completedToolCalls })
-    } else {
-      // 发送响应完成信号，让 TextChunkMiddleware 处理文本完成
-      this.sendUsageMetrics(controller, usage)
-    }
-  }
-
-  /**
-   * 解析工具调用
-   */
-  private parseToolCalls(toolCalls: BedrockSdkToolCall[]): BedrockSdkToolCall[] {
-    return toolCalls.map((tc) => {
-      try {
-        const parsedInput = typeof tc.input === 'string' && tc.input ? JSON.parse(tc.input) : tc.input
-        return { ...tc, input: parsedInput || {} }
-      } catch (e) {
-        console.error('解析工具调用输入 JSON 时出错:', tc.input, e)
-        return { ...tc, input: {} }
-      }
-    })
   }
 }
