@@ -44,13 +44,10 @@ import { GenericChunk } from '../../middleware/schemas'
 import { BaseApiClient } from '../BaseApiClient'
 import { RequestTransformer, ResponseChunkTransformer } from '../types'
 
-// Type definitions for better type safety
-interface BedrockUsage {
-  inputTokens?: number
-  outputTokens?: number
-  totalTokens?: number
-}
-
+/**
+ * Amazon Bedrock API 客户端
+ * 负责处理与 Amazon Bedrock 服务的所有交互，包括消息转换、工具调用和流响应处理
+ */
 export class BedrockAPIClient extends BaseApiClient<
   BedrockSdkInstance,
   BedrockSdkParams,
@@ -60,22 +57,95 @@ export class BedrockAPIClient extends BaseApiClient<
   BedrockSdkToolCall,
   BedrockSdkTool
 > {
-  // @ts-ignore sdk未提供
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  override async generateImage(generateImageParams: GenerateImageParams): Promise<string[]> {
-    return []
-  }
+  private static readonly DEFAULT_REGION = 'us-east-1'
+  private static readonly MIN_BUDGET_TOKENS = 1024
+  private static readonly THINKING_TAG_REGEX = /<thinking>(.*?)<\/thinking>/s
 
-  // @ts-ignore sdk未提供
-  override async getEmbeddingDimensions(): Promise<number> {
-    throw new Error("Anthropic SDK doesn't support getEmbeddingDimensions method.")
-  }
   private client?: BedrockRuntimeClient
 
   constructor(provider: Provider) {
     super(provider)
   }
 
+  /**
+   * 生成图像 - Bedrock SDK 暂未提供此功能
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  override async generateImage(_generateImageParams: GenerateImageParams): Promise<string[]> {
+    return []
+  }
+
+  /**
+   * 获取嵌入向量维度 - Bedrock SDK 暂未提供此功能
+   */
+  override async getEmbeddingDimensions(): Promise<number> {
+    throw new Error('Bedrock SDK 暂不支持 getEmbeddingDimensions 方法')
+  }
+
+  /**
+   * 列出可用模型
+   */
+  override async listModels(): Promise<SdkModel[]> {
+    return []
+  }
+
+  /**
+   * 创建聊天完成请求
+   */
+  override async createCompletions(payload: BedrockSdkParams): Promise<BedrockSdkRawOutput> {
+    const client = await this.getSdkInstance()
+    const messages = this.convertPayloadMessages(payload.messages)
+
+    const commandParams = {
+      modelId: payload.modelId,
+      messages,
+      system: payload.system,
+      inferenceConfig: payload.inferenceConfig,
+      toolConfig: payload.toolConfig,
+      additionalModelRequestFields: payload.additionalModelRequestFields
+    }
+
+    if (payload.stream) {
+      const command = new ConverseStreamCommand(commandParams)
+      const response = await client.send(command)
+      return response.stream as BedrockSdkRawOutput
+    } else {
+      const command = new ConverseCommand(commandParams)
+      const response = await client.send(command)
+      return response as BedrockSdkRawOutput
+    }
+  }
+
+  /**
+   * 获取 Bedrock SDK 实例
+   */
+  async getSdkInstance(): Promise<BedrockSdkInstance> {
+    if (!this.client) {
+      this.client = this.createBedrockClient()
+    }
+    return this.client as BedrockSdkInstance
+  }
+
+  /**
+   * 创建 Bedrock 客户端实例
+   */
+  private createBedrockClient(): BedrockRuntimeClient {
+    if (!isBedrock(this.provider)) {
+      throw new Error('提供商不是 Bedrock 提供商')
+    }
+
+    return new BedrockRuntimeClient({
+      region: this.provider.region || BedrockAPIClient.DEFAULT_REGION,
+      credentials: {
+        accessKeyId: this.provider.accessKey || '',
+        secretAccessKey: this.provider.secretKey || ''
+      }
+    })
+  }
+
+  /**
+   * 获取模型 ID（支持跨区域模型）
+   */
   private getModelId(model: Model): string {
     if (!isBedrock(this.provider)) {
       return model.id
@@ -83,22 +153,9 @@ export class BedrockAPIClient extends BaseApiClient<
     return this.provider.crossRegion ? `us.${model.id}` : model.id
   }
 
-  async getSdkInstance(): Promise<BedrockSdkInstance> {
-    if (!this.client) {
-      if (!isBedrock(this.provider)) {
-        throw new Error('Provider is not a Bedrock provider')
-      }
-      this.client = new BedrockRuntimeClient({
-        region: this.provider.region || 'us-east-1',
-        credentials: {
-          accessKeyId: this.provider.accessKey || '',
-          secretAccessKey: this.provider.secretKey || ''
-        }
-      })
-    }
-    return this.client as BedrockSdkInstance
-  }
-
+  /**
+   * 获取温度参数（推理模型时返回 undefined）
+   */
   override getTemperature(assistant: Assistant, model: Model): number | undefined {
     if (assistant.settings?.reasoning_effort && isReasoningModel(model)) {
       return undefined
@@ -106,6 +163,9 @@ export class BedrockAPIClient extends BaseApiClient<
     return assistant.settings?.temperature
   }
 
+  /**
+   * 获取 TopP 参数（推理模型时返回 undefined）
+   */
   override getTopP(assistant: Assistant, model: Model): number | undefined {
     if (assistant.settings?.reasoning_effort && isReasoningModel(model)) {
       return undefined
@@ -114,12 +174,9 @@ export class BedrockAPIClient extends BaseApiClient<
   }
 
   /**
-   * Get the reasoning configuration for Bedrock extended thinking
-   * @param assistant - The assistant
-   * @param model - The model
-   * @returns The reasoning configuration for additionalModelRequestFields
+   * 获取推理思考预算配置
    */
-  private getBudgetTokenConfig(assistant: Assistant, model: Model): Record<string, any> | undefined {
+  private getReasoningBudgetConfig(assistant: Assistant, model: Model): Record<string, any> | undefined {
     if (!isReasoningModel(model)) {
       return undefined
     }
@@ -128,25 +185,10 @@ export class BedrockAPIClient extends BaseApiClient<
     const reasoningEffort = assistant?.settings?.reasoning_effort
 
     if (reasoningEffort === undefined) {
-      return {
-        thinking: {
-          type: 'disabled'
-        }
-      }
+      return { thinking: { type: 'disabled' } }
     }
 
-    const effortRatio = EFFORT_RATIO[reasoningEffort]
-
-    const budgetTokens = Math.max(
-      1024,
-      Math.floor(
-        Math.min(
-          (findTokenLimit(model.id)?.max! - findTokenLimit(model.id)?.min!) * effortRatio +
-            findTokenLimit(model.id)?.min!,
-          (maxTokens || DEFAULT_MAX_TOKENS) * effortRatio
-        )
-      )
-    )
+    const budgetTokens = this.calculateBudgetTokens(model, reasoningEffort, maxTokens)
 
     return {
       thinking: {
@@ -156,78 +198,51 @@ export class BedrockAPIClient extends BaseApiClient<
     }
   }
 
-  override async createCompletions(payload: BedrockSdkParams): Promise<BedrockSdkRawOutput> {
-    const client = await this.getSdkInstance()
+  /**
+   * 计算思考预算令牌数
+   */
+  private calculateBudgetTokens(model: Model, reasoningEffort: string, maxTokens?: number): number {
+    const effortRatio = EFFORT_RATIO[reasoningEffort]
+    const tokenLimit = findTokenLimit(model.id)
 
-    // Convert BedrockSdkMessageParam[] to BedrockMessage[] for AWS SDK
-    const messages = payload.messages.map((msg) => ({
+    if (!tokenLimit) {
+      return BedrockAPIClient.MIN_BUDGET_TOKENS
+    }
+
+    const dynamicTokens = (tokenLimit.max - tokenLimit.min) * effortRatio + tokenLimit.min
+    const maxAllowedTokens = (maxTokens || DEFAULT_MAX_TOKENS) * effortRatio
+
+    return Math.max(BedrockAPIClient.MIN_BUDGET_TOKENS, Math.floor(Math.min(dynamicTokens, maxAllowedTokens)))
+  }
+
+  /**
+   * 转换载荷中的消息格式
+   */
+  private convertPayloadMessages(messages: BedrockSdkMessageParam[]) {
+    return messages.map((msg) => ({
       role: msg.role as ConversationRole,
       content: msg.content as BedrockContentBlock[]
     }))
-
-    if (payload.stream) {
-      const command = new ConverseStreamCommand({
-        modelId: payload.modelId,
-        messages: messages,
-        system: payload.system,
-        inferenceConfig: payload.inferenceConfig,
-        toolConfig: payload.toolConfig,
-        additionalModelRequestFields: payload.additionalModelRequestFields
-      })
-      const response = await client.send(command)
-      return response.stream as BedrockSdkRawOutput
-    } else {
-      const command = new ConverseCommand({
-        modelId: payload.modelId,
-        messages: messages,
-        system: payload.system,
-        inferenceConfig: payload.inferenceConfig,
-        toolConfig: payload.toolConfig,
-        additionalModelRequestFields: payload.additionalModelRequestFields
-      })
-      const response = await client.send(command)
-      return response as BedrockSdkRawOutput
-    }
-  }
-  override async listModels(): Promise<SdkModel[]> {
-    return []
   }
 
+  /**
+   * 将消息转换为 SDK 参数格式
+   */
   public async convertMessageToSdkParam(message: Message, model: Model): Promise<BedrockSdkMessageParam> {
     const isVision = isVisionModel(model)
     const content = await this.getMessageContent(message)
-    const fileBlocks = findFileBlocks(message)
-    const imageBlocks = findImageBlocks(message)
-
     const contentBlocks: ContentBlock[] = []
 
+    // 添加文本内容
     if (content) {
       contentBlocks.push({ text: content })
     }
 
-    // Handle images
-    for (const imageBlock of imageBlocks) {
-      if (isVision && imageBlock.file) {
-        const image = await window.api.file.base64Image(imageBlock.file.id + imageBlock.file.ext)
-        const base64Data = image.data.split(',')[1]
-        const format = image.data.includes('jpeg') ? 'jpeg' : 'png'
-        contentBlocks.push({
-          image: {
-            format: format as 'jpeg' | 'png' | 'gif' | 'webp',
-            source: { bytes: new Uint8Array(Buffer.from(base64Data, 'base64')) }
-          }
-        })
-      }
-    }
+    // 处理图像内容
+    await this.processImageBlocks(message, contentBlocks, isVision)
 
-    // Handle text files
-    for (const fileBlock of fileBlocks) {
-      const file = fileBlock.file
-      if (file && [FileTypes.TEXT, FileTypes.DOCUMENT].includes(file.type)) {
-        const fileContent = await window.api.file.read(file.id + file.ext)
-        contentBlocks.push({ text: `${file.origin_name}\n${fileContent.trim()}` })
-      }
-    }
+    // 处理文件内容
+    await this.processFileBlocks(message, contentBlocks)
 
     return {
       role: message.role === 'system' ? 'user' : message.role,
@@ -235,25 +250,87 @@ export class BedrockAPIClient extends BaseApiClient<
     } as BedrockSdkMessageParam
   }
 
-  convertMcpToolsToSdkTools(mcpTools: MCPTool[]): BedrockSdkTool[] {
-    return mcpTools.map(
-      (tool) =>
-        ({
-          toolSpec: {
-            name: tool.name,
-            description: tool.description,
-            inputSchema: {
-              json: tool.inputSchema
-            }
-          }
-        }) as unknown as BedrockSdkTool
-    )
+  /**
+   * 处理图像块
+   */
+  private async processImageBlocks(message: Message, contentBlocks: ContentBlock[], isVision: boolean) {
+    const imageBlocks = findImageBlocks(message)
+
+    for (const imageBlock of imageBlocks) {
+      if (isVision && imageBlock.file) {
+        const imageContent = await this.convertImageToContentBlock(imageBlock.file)
+        if (imageContent) {
+          contentBlocks.push(imageContent)
+        }
+      }
+    }
   }
 
+  /**
+   * 转换图像文件为内容块
+   */
+  private async convertImageToContentBlock(file: any): Promise<ContentBlock | null> {
+    try {
+      const image = await window.api.file.base64Image(file.id + file.ext)
+      const base64Data = image.data.split(',')[1]
+      const format = image.data.includes('jpeg') ? 'jpeg' : 'png'
+
+      return {
+        image: {
+          format: format as 'jpeg' | 'png' | 'gif' | 'webp',
+          source: { bytes: new Uint8Array(Buffer.from(base64Data, 'base64')) }
+        }
+      }
+    } catch (error) {
+      console.error('转换图像文件失败:', error)
+      return null
+    }
+  }
+
+  /**
+   * 处理文件块
+   */
+  private async processFileBlocks(message: Message, contentBlocks: ContentBlock[]) {
+    const fileBlocks = findFileBlocks(message)
+
+    for (const fileBlock of fileBlocks) {
+      const file = fileBlock.file
+      if (file && [FileTypes.TEXT, FileTypes.DOCUMENT].includes(file.type)) {
+        try {
+          const fileContent = await window.api.file.read(file.id + file.ext)
+          contentBlocks.push({ text: `${file.origin_name}\n${fileContent.trim()}` })
+        } catch (error) {
+          console.error('读取文件失败:', error)
+        }
+      }
+    }
+  }
+
+  /**
+   * 将 MCP 工具转换为 SDK 工具
+   */
+  convertMcpToolsToSdkTools(mcpTools: MCPTool[]): BedrockSdkTool[] {
+    return mcpTools.map((tool) => ({
+      toolSpec: {
+        name: tool.name,
+        description: tool.description,
+        inputSchema: {
+          json: tool.inputSchema
+        }
+      }
+    }))
+  }
+
+  /**
+   * 根据工具调用查找对应的 MCP 工具
+   */
   convertSdkToolCallToMcp(toolCall: BedrockSdkToolCall, mcpTools: MCPTool[]): MCPTool | undefined {
     return mcpTools.find((tool) => tool.name === toolCall.name)
   }
 
+  /**
+   * 将 SDK 工具调用转换为 MCP 工具响应
+   */
   convertSdkToolCallToMcpToolResponse(toolCall: BedrockSdkToolCall, mcpTool: MCPTool): ToolCallResponse {
     return {
       id: toolCall.toolUseId,
@@ -264,90 +341,105 @@ export class BedrockAPIClient extends BaseApiClient<
     } as ToolCallResponse
   }
 
+  /**
+   * 将 MCP 工具响应转换为 SDK 消息参数
+   */
   convertMcpToolResponseToSdkMessageParam(
     mcpToolResponse: MCPToolResponse,
     resp: MCPCallToolResponse
   ): BedrockSdkMessageParam | undefined {
-    // 处理工具调用响应的两种情况
+    const toolUseId = this.extractToolUseId(mcpToolResponse)
+    if (!toolUseId) {
+      return undefined
+    }
+
+    const resultText = this.extractResultText(resp)
+
+    return {
+      role: 'user',
+      content: [
+        {
+          toolResult: {
+            toolUseId,
+            content: [{ text: resultText }]
+          }
+        }
+      ]
+    } as BedrockSdkMessageParam
+  }
+
+  /**
+   * 提取工具使用 ID
+   */
+  private extractToolUseId(mcpToolResponse: MCPToolResponse): string | undefined {
     if ('toolUseId' in mcpToolResponse && mcpToolResponse.toolUseId) {
-      // 为 Bedrock 的工具调用结果准备内容
-      let resultText: string
-
-      if (Array.isArray(resp.content) && resp.content.length > 0 && resp.content[0].text) {
-        resultText = resp.content.map((c) => c.text || '').join('\n')
-      } else if (typeof resp.content === 'object') {
-        resultText = JSON.stringify(resp.content)
-      } else {
-        resultText = String(resp.content)
-      }
-      // 创建符合 Bedrock API 格式的工具结果消息
-      return {
-        role: 'user',
-        content: [
-          {
-            toolResult: {
-              toolUseId: mcpToolResponse.toolUseId,
-              content: [{ text: resultText }]
-            }
-          }
-        ]
-      } as BedrockSdkMessageParam
-    } else if ('toolCallId' in mcpToolResponse && mcpToolResponse.toolCallId) {
-      // 兼容其他格式的工具调用ID
-      let resultText: string
-
-      if (Array.isArray(resp.content) && resp.content.length > 0 && resp.content[0].text) {
-        resultText = resp.content.map((c) => c.text || '').join('\n')
-      } else if (typeof resp.content === 'object') {
-        resultText = JSON.stringify(resp.content)
-      } else {
-        resultText = String(resp.content)
-      }
-      return {
-        role: 'user',
-        content: [
-          {
-            toolResult: {
-              toolUseId: mcpToolResponse.toolCallId,
-              content: [{ text: resultText }]
-            }
-          }
-        ]
-      } as BedrockSdkMessageParam
+      return mcpToolResponse.toolUseId
+    }
+    if ('toolCallId' in mcpToolResponse && mcpToolResponse.toolCallId) {
+      return mcpToolResponse.toolCallId
     }
     return undefined
   }
 
+  /**
+   * 提取结果文本
+   */
+  private extractResultText(resp: MCPCallToolResponse): string {
+    if (Array.isArray(resp.content) && resp.content.length > 0 && resp.content[0].text) {
+      return resp.content.map((c) => c.text || '').join('\n')
+    }
+    if (typeof resp.content === 'object') {
+      return JSON.stringify(resp.content)
+    }
+    return String(resp.content)
+  }
+
+  /**
+   * 构建 SDK 消息列表
+   */
   override buildSdkMessages(
     currentReqMessages: BedrockSdkMessageParam[],
     output: BedrockSdkRawOutput | string | undefined,
     toolResults: BedrockSdkMessageParam[],
     toolCalls?: BedrockSdkToolCall[]
   ): BedrockSdkMessageParam[] {
-    console.log('buildSdkMessages - toolCalls', toolCalls)
-    console.log('buildSdkMessages - output', output)
-    console.log('buildSdkMessages - toolResults', toolResults)
-    console.log('buildSdkMessages - currentReqMessages', currentReqMessages)
-
-    // 判断是否为工具调用场景
     const hasTextOutput = typeof output === 'string' && output.trim().length > 0
     const hasToolCalls = toolCalls && toolCalls.length > 0
 
-    // 创建助手消息
+    const assistantMessage = this.createAssistantMessage(output, toolCalls, hasTextOutput, hasToolCalls || false)
+    let result = [...currentReqMessages]
+
+    if (assistantMessage.content!.length > 0) {
+      result.push(assistantMessage)
+    }
+
+    if (toolResults && toolResults.length > 0) {
+      result = [...result, ...toolResults]
+    }
+
+    return result
+  }
+
+  /**
+   * 创建助手消息
+   */
+  private createAssistantMessage(
+    output: BedrockSdkRawOutput | string | undefined,
+    toolCalls: BedrockSdkToolCall[] | undefined,
+    hasTextOutput: boolean,
+    hasToolCalls: boolean
+  ): BedrockSdkMessageParam {
     const assistantMessage: BedrockSdkMessageParam = {
       role: 'assistant',
       content: []
     }
 
-    // 添加文本输出（如果有）
     if (hasTextOutput) {
       assistantMessage.content!.push({ text: output as string })
     }
 
-    // 添加工具调用（如果有）
-    if (hasToolCalls) {
-      for (const tool of toolCalls!) {
-        // Create the content block with toolUse properly
+    if (hasToolCalls && toolCalls) {
+      for (const tool of toolCalls) {
         const contentBlock = {
           toolUse: {
             toolUseId: tool.toolUseId,
@@ -359,24 +451,12 @@ export class BedrockAPIClient extends BaseApiClient<
       }
     }
 
-    // 构建最终消息列表
-    let result = [...currentReqMessages]
-
-    // 如果助手消息有内容，添加到结果中
-    if (assistantMessage.content!.length > 0) {
-      result.push(assistantMessage)
-    }
-
-    // 如果有工具结果，则添加到结果中
-    // 注意：当有工具调用结果时，我们仍然需要保留以前的消息历史
-    if (toolResults && toolResults.length > 0) {
-      result = [...result, ...toolResults]
-    }
-
-    console.log('buildSdkMessages - result', result)
-    return result
+    return assistantMessage
   }
 
+  /**
+   * 估算消息令牌数
+   */
   override estimateMessageTokens(message: BedrockSdkMessageParam): number {
     let sum = 0
     if (message.content) {
@@ -389,204 +469,304 @@ export class BedrockAPIClient extends BaseApiClient<
     return sum
   }
 
+  /**
+   * 从 SDK 载荷中提取消息
+   */
   extractMessagesFromSdkPayload(sdkPayload: BedrockSdkParams): BedrockSdkMessageParam[] {
     return sdkPayload.messages || []
   }
 
+  /**
+   * 获取请求转换器
+   */
   getRequestTransformer(): RequestTransformer<BedrockSdkParams, BedrockSdkMessageParam> {
     return {
-      transform: async (
-        coreRequest,
-        assistant,
-        model,
-        isRecursiveCall,
-        recursiveSdkMessages
-      ): Promise<{
-        payload: BedrockSdkParams
-        messages: BedrockSdkMessageParam[]
-        metadata: Record<string, any>
-      }> => {
+      transform: async (coreRequest, assistant, model, isRecursiveCall, recursiveSdkMessages) => {
         const { messages, mcpTools, maxTokens, streamOutput } = coreRequest
 
-        // Setup tools configuration
+        // 配置工具
         this.setupToolsConfig({ mcpTools, model, enableToolUse: true })
         const tools = this.useSystemPromptForTools ? [] : mcpTools ? this.convertMcpToolsToSdkTools(mcpTools) : []
 
-        // Build system message
+        // 构建系统消息
         let systemContent = assistant.prompt || ''
         if (this.useSystemPromptForTools) {
           systemContent = await buildSystemPrompt(systemContent, mcpTools, assistant)
         }
 
-        // Process user messages
-        const userMessages: BedrockSdkMessageParam[] = []
-        if (typeof messages === 'string') {
-          userMessages.push({
-            role: 'user',
-            content: [{ text: messages }]
-          })
-        } else {
-          const processedMessages = addImageFileToContents(messages)
-          for (const message of processedMessages) {
-            userMessages.push(await this.convertMessageToSdkParam(message, model))
-          }
-        }
+        // 处理用户消息
+        const userMessages = await this.processUserMessages(messages, model)
+        const reqMessages = isRecursiveCall && recursiveSdkMessages?.length ? recursiveSdkMessages : userMessages
 
-        const reqMessages =
-          isRecursiveCall && recursiveSdkMessages && recursiveSdkMessages.length > 0
-            ? recursiveSdkMessages
-            : userMessages
+        // 构建推理配置
+        const inferenceConfig = this.buildInferenceConfig(assistant, model, maxTokens)
+        const reasoningConfig = this.getReasoningBudgetConfig(assistant, model)
 
-        // Build inference config
-        const inferenceConfig: any = {
-          maxTokens: maxTokens || DEFAULT_MAX_TOKENS,
-          temperature: this.getTemperature(assistant, model),
-          topP: this.getTopP(assistant, model)
-        }
-
-        // Get reasoning configuration
-        const reasoningConfig = this.getBudgetTokenConfig(assistant, model)
-        console.log('mcpTools', mcpTools)
-        console.log('tools', tools)
-        console.log('useSystemPromptForTools', this.useSystemPromptForTools)
-        console.log('systemContent', systemContent)
         const sdkParams: BedrockSdkParams = {
           modelId: this.getModelId(model),
           messages: reqMessages,
           system: systemContent ? [{ text: systemContent }] : undefined,
           inferenceConfig,
-          toolConfig: tools.length > 0 ? { tools: tools } : undefined,
+          toolConfig: tools.length > 0 ? { tools } : undefined,
           additionalModelRequestFields: reasoningConfig,
           stream: streamOutput
         }
+
         const timeout = this.getTimeout(model)
         return { payload: sdkParams, messages: reqMessages, metadata: { timeout } }
       }
     }
   }
 
+  /**
+   * 处理用户消息
+   */
+  private async processUserMessages(messages: string | Message[], model: Model): Promise<BedrockSdkMessageParam[]> {
+    const userMessages: BedrockSdkMessageParam[] = []
+
+    if (typeof messages === 'string') {
+      userMessages.push({
+        role: 'user',
+        content: [{ text: messages }]
+      })
+    } else {
+      const processedMessages = addImageFileToContents(messages)
+      for (const message of processedMessages) {
+        userMessages.push(await this.convertMessageToSdkParam(message, model))
+      }
+    }
+
+    return userMessages
+  }
+
+  /**
+   * 构建推理配置
+   */
+  private buildInferenceConfig(assistant: Assistant, model: Model, maxTokens?: number) {
+    return {
+      maxTokens: maxTokens || DEFAULT_MAX_TOKENS,
+      temperature: this.getTemperature(assistant, model),
+      topP: this.getTopP(assistant, model)
+    }
+  }
+
+  /**
+   * 获取响应块转换器
+   */
   getResponseChunkTransformer(): ResponseChunkTransformer<BedrockSdkRawChunk> {
     return () => {
       const toolCalls: BedrockSdkToolCall[] = []
-      let usage: any = null
+      const usageContainer = { current: null as any }
 
       return {
         transform: (chunk: BedrockSdkRawChunk, controller: TransformStreamDefaultController<GenericChunk>) => {
           if (!chunk) {
-            console.warn('Received empty chunk from Bedrock API')
+            console.warn('从 Bedrock API 接收到空块')
             return
           }
 
           if ('output' in chunk) {
-            const response = chunk
-            if (response.usage) {
-              usage = response.usage
-            }
-            response.output?.message?.content?.forEach((item: any) => {
-              if (item.text) {
-                controller.enqueue({ type: ChunkType.TEXT_DELTA, text: item.text })
-              }
-              if (item.toolUse) {
-                toolCalls.push({
-                  toolUseId: item.toolUse.toolUseId || '',
-                  name: item.toolUse.name || '',
-                  input: item.toolUse.input || {},
-                  type: 'tool_use'
-                })
-              }
-            })
-
-            // 处理完所有内容后，根据 stopReason 决定发送什么
-            if (response.stopReason === 'tool_use' && toolCalls.length > 0) {
-              const completedToolCalls = toolCalls.map((tc) => {
-                try {
-                  const parsedInput = typeof tc.input === 'string' && tc.input ? JSON.parse(tc.input) : tc.input
-                  return { ...tc, input: parsedInput || {} }
-                } catch (e) {
-                  console.error('Error parsing tool call input JSON:', tc.input, e)
-                  return { ...tc, input: {} }
-                }
-              })
-              console.log('completedToolCalls', completedToolCalls)
-              controller.enqueue({ type: ChunkType.MCP_TOOL_CREATED, tool_calls: completedToolCalls })
-            } else {
-              // 只有在非工具调用时才发送完成信号
-              controller.enqueue({
-                type: ChunkType.LLM_RESPONSE_COMPLETE,
-                response: {
-                  usage: {
-                    prompt_tokens: usage.usage.inputTokens || 0,
-                    completion_tokens: usage.usage.outputTokens || 0,
-                    total_tokens: usage.usage.totalTokens || 0
-                  }
-                }
-              })
-            }
+            this.handleNonStreamingChunk(chunk, controller, toolCalls, usageContainer)
           } else {
-            // Handle streaming chunks by checking for the presence of specific keys
-            const streamChunk = chunk as any
-
-            console.log('streamChunk', streamChunk)
-
-            if (streamChunk.contentBlockStart?.start?.toolUse) {
-              const { toolUseId, name } = streamChunk.contentBlockStart.start.toolUse
-              toolCalls.push({ toolUseId: toolUseId || '', name: name || '', input: '', type: 'tool_use' })
-            }
-
-            if (streamChunk.contentBlockDelta?.delta) {
-              const delta = streamChunk.contentBlockDelta.delta
-              if (delta.text) {
-                controller.enqueue({ type: ChunkType.TEXT_DELTA, text: delta.text })
-              }
-              if (delta.toolUse?.input && toolCalls.length > 0) {
-                toolCalls[toolCalls.length - 1].input += delta.toolUse.input
-              }
-              // Handle extended thinking (reasoning) content
-              if (delta.reasoningContent?.text) {
-                controller.enqueue({
-                  type: ChunkType.THINKING_DELTA,
-                  text: delta.reasoningContent.text
-                } as ThinkingDeltaChunk)
-              }
-            }
-
-            if (streamChunk.metadata?.usage) {
-              usage = streamChunk.metadata
-              // 只有在非工具调用时才发送完成信号
-              console.log('usage', usage)
-              controller.enqueue({
-                type: ChunkType.LLM_RESPONSE_COMPLETE,
-                response: {
-                  usage: {
-                    prompt_tokens: usage.usage.inputTokens || 0,
-                    completion_tokens: usage.usage.outputTokens || 0,
-                    total_tokens: usage.usage.totalTokens || 0
-                  }
-                }
-              })
-            }
-
-            if (streamChunk.messageStop?.stopReason) {
-              console.log('toolCalls --->', toolCalls)
-              console.log('stopReason --->', streamChunk.messageStop.stopReason)
-
-              if (streamChunk.messageStop.stopReason === 'tool_use' && toolCalls.length > 0) {
-                const completedToolCalls = toolCalls.map((tc) => {
-                  try {
-                    const parsedInput = typeof tc.input === 'string' && tc.input ? JSON.parse(tc.input) : tc.input
-                    return { ...tc, input: parsedInput || {} }
-                  } catch (e) {
-                    console.error('Error parsing tool call input JSON:', tc.input, e)
-                    return { ...tc, input: {} }
-                  }
-                })
-                console.log('completedToolCalls in stream', completedToolCalls)
-                controller.enqueue({ type: ChunkType.MCP_TOOL_CREATED, tool_calls: completedToolCalls })
-              }
-            }
+            this.handleStreamingChunk(chunk, controller, toolCalls, usageContainer)
           }
         }
       }
     }
+  }
+
+  /**
+   * 处理非流式响应块
+   */
+  private handleNonStreamingChunk(
+    chunk: any,
+    controller: TransformStreamDefaultController<GenericChunk>,
+    toolCalls: BedrockSdkToolCall[],
+    usageContainer: { current: any }
+  ) {
+    if (chunk.usage) {
+      usageContainer.current = chunk.usage
+    }
+
+    chunk.output?.message?.content?.forEach((item: any) => {
+      if (item.text) {
+        controller.enqueue({ type: ChunkType.TEXT_DELTA, text: item.text })
+      }
+      if (item.toolUse) {
+        toolCalls.push({
+          toolUseId: item.toolUse.toolUseId || '',
+          name: item.toolUse.name || '',
+          input: item.toolUse.input || {},
+          type: 'tool_use'
+        })
+      }
+    })
+
+    this.handleResponseCompletion(chunk.stopReason, controller, toolCalls, usageContainer.current)
+  }
+
+  /**
+   * 处理流式响应块
+   */
+  private handleStreamingChunk(
+    chunk: any,
+    controller: TransformStreamDefaultController<GenericChunk>,
+    toolCalls: BedrockSdkToolCall[],
+    usageContainer: { current: any }
+  ) {
+    const streamChunk = chunk as any
+
+    // 处理工具使用开始
+    if (streamChunk.contentBlockStart?.start?.toolUse) {
+      this.handleToolUseStart(streamChunk, toolCalls)
+    }
+
+    // 处理内容增量
+    if (streamChunk.contentBlockDelta?.delta) {
+      this.handleContentDelta(streamChunk, controller, toolCalls)
+    }
+
+    // 处理使用情况元数据
+    if (streamChunk.metadata?.usage) {
+      usageContainer.current = streamChunk.metadata
+      this.sendUsageMetrics(controller, usageContainer.current)
+    }
+
+    // 处理消息停止
+    if (streamChunk.messageStop?.stopReason) {
+      this.handleResponseCompletion(streamChunk.messageStop.stopReason, controller, toolCalls, usageContainer.current)
+    }
+  }
+
+  /**
+   * 处理工具使用开始
+   */
+  private handleToolUseStart(streamChunk: any, toolCalls: BedrockSdkToolCall[]) {
+    try {
+      const { toolUseId, name } = streamChunk.contentBlockStart.start.toolUse
+      toolCalls.push({
+        toolUseId: toolUseId || '',
+        name: name || '',
+        input: '',
+        type: 'tool_use'
+      })
+    } catch (error) {
+      console.warn('处理工具使用开始时出错:', error)
+    }
+  }
+
+  /**
+   * 处理内容增量
+   */
+  private handleContentDelta(
+    streamChunk: any,
+    controller: TransformStreamDefaultController<GenericChunk>,
+    toolCalls: BedrockSdkToolCall[]
+  ) {
+    const delta = streamChunk.contentBlockDelta.delta
+
+    if (delta.text) {
+      this.handleTextDelta(delta.text, controller)
+    }
+
+    if (delta.toolUse?.input && toolCalls.length > 0) {
+      this.handleToolInputDelta(delta.toolUse.input, toolCalls)
+    }
+
+    if (delta.reasoningContent?.text) {
+      this.handleReasoningDelta(delta.reasoningContent.text, controller)
+    }
+  }
+
+  /**
+   * 处理文本增量
+   */
+  private handleTextDelta(text: string, controller: TransformStreamDefaultController<GenericChunk>) {
+    const thinkingMatch = text.match(BedrockAPIClient.THINKING_TAG_REGEX)
+
+    if (thinkingMatch) {
+      // 提取思考内容并发送为思考增量
+      controller.enqueue({
+        type: ChunkType.THINKING_DELTA,
+        text: thinkingMatch[1]
+      } as ThinkingDeltaChunk)
+
+      // 移除思考标签并发送剩余内容
+      const cleanText = text.replace(BedrockAPIClient.THINKING_TAG_REGEX, '').trim()
+      if (cleanText) {
+        controller.enqueue({ type: ChunkType.TEXT_DELTA, text: cleanText })
+      }
+    } else {
+      controller.enqueue({ type: ChunkType.TEXT_DELTA, text })
+    }
+  }
+
+  /**
+   * 处理工具输入增量
+   */
+  private handleToolInputDelta(input: string, toolCalls: BedrockSdkToolCall[]) {
+    try {
+      toolCalls[toolCalls.length - 1].input += input
+    } catch (error) {
+      console.warn('处理工具输入时出错:', error)
+    }
+  }
+
+  /**
+   * 处理推理增量
+   */
+  private handleReasoningDelta(text: string, controller: TransformStreamDefaultController<GenericChunk>) {
+    controller.enqueue({
+      type: ChunkType.THINKING_DELTA,
+      text
+    } as ThinkingDeltaChunk)
+  }
+
+  /**
+   * 发送使用情况指标
+   */
+  private sendUsageMetrics(controller: TransformStreamDefaultController<GenericChunk>, usage: any) {
+    controller.enqueue({
+      type: ChunkType.LLM_RESPONSE_COMPLETE,
+      response: {
+        usage: {
+          prompt_tokens: usage?.usage?.inputTokens || 0,
+          completion_tokens: usage?.usage?.outputTokens || 0,
+          total_tokens: usage?.usage?.totalTokens || 0
+        }
+      }
+    })
+  }
+
+  /**
+   * 处理响应完成
+   */
+  private handleResponseCompletion(
+    stopReason: string,
+    controller: TransformStreamDefaultController<GenericChunk>,
+    toolCalls: BedrockSdkToolCall[],
+    usage: any
+  ) {
+    if (stopReason === 'tool_use' && toolCalls.length > 0) {
+      const completedToolCalls = this.parseToolCalls(toolCalls)
+      controller.enqueue({ type: ChunkType.MCP_TOOL_CREATED, tool_calls: completedToolCalls })
+    } else {
+      this.sendUsageMetrics(controller, usage)
+    }
+  }
+
+  /**
+   * 解析工具调用
+   */
+  private parseToolCalls(toolCalls: BedrockSdkToolCall[]): BedrockSdkToolCall[] {
+    return toolCalls.map((tc) => {
+      try {
+        const parsedInput = typeof tc.input === 'string' && tc.input ? JSON.parse(tc.input) : tc.input
+        return { ...tc, input: parsedInput || {} }
+      } catch (e) {
+        console.error('解析工具调用输入 JSON 时出错:', tc.input, e)
+        return { ...tc, input: {} }
+      }
+    })
   }
 }

@@ -164,7 +164,6 @@ const visionAllowedModels = [
   'claude-3',
   'claude-sonnet-4',
   'claude-opus-4',
-  'nova',
   'vision',
   'glm-4(?:\\.\\d+)?v(?:-[\\w-]+)?',
   'qwen-vl',
@@ -2716,6 +2715,10 @@ export function isWebSearchModel(model: Model): boolean {
   }
 
   const baseName = getLowerBaseModelName(model.id, '/')
+
+  if (model.id.includes('nova') || provider.type.includes('bedrock')) {
+    return false
+  }
 
   // 不管哪个供应商都判断了
   if (model.id.includes('claude')) {
