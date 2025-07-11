@@ -8,7 +8,22 @@ import {
   ToolUseBlock
 } from '@anthropic-ai/sdk/resources'
 import { MessageStream } from '@anthropic-ai/sdk/resources/messages/messages'
-import { BedrockRuntimeClient, InferenceConfiguration, ToolConfiguration } from '@aws-sdk/client-bedrock-runtime'
+import {
+  BedrockRuntimeClient,
+  ContentBlock,
+  ContentBlockDeltaEvent,
+  ContentBlockStartEvent,
+  ContentBlockStopEvent,
+  ConverseResponse,
+  ConverseStreamMetadataEvent,
+  ConverseStreamOutput,
+  InferenceConfiguration,
+  MessageStartEvent,
+  MessageStopEvent,
+  SystemContentBlock,
+  Tool as BedrockTool,
+  ToolConfiguration
+} from '@aws-sdk/client-bedrock-runtime'
 import {
   Content,
   CreateChatParameters,
@@ -17,7 +32,7 @@ import {
   GoogleGenAI,
   Model as GeminiModel,
   SendMessageParameters,
-  Tool
+  Tool as GeminiTool
 } from '@google/genai'
 import OpenAI, { AzureOpenAI } from 'openai'
 import { Stream } from 'openai/streaming'
@@ -59,7 +74,7 @@ export type SdkToolCall =
 export type SdkTool =
   | OpenAI.Chat.Completions.ChatCompletionTool
   | ToolUnion
-  | Tool
+  | GeminiTool
   | OpenAIResponseSdkTool
   | BedrockSdkTool
 export type SdkModel = OpenAI.Models.Model | Anthropic.ModelInfo | GeminiModel | NewApiModel
@@ -142,46 +157,49 @@ export interface NewApiModel extends OpenAI.Models.Model {
 }
 
 /**
- * Bedrock
+ * Bedrock - 基于AWS SDK原生类型的优雅定义
  */
 
 export type BedrockSdkParams = {
   modelId: string
   messages: BedrockSdkMessageParam[]
-  system?: { text: string }[]
+  system?: SystemContentBlock[]
   inferenceConfig?: InferenceConfiguration
   toolConfig?: ToolConfiguration
-  additionalModelRequestFields?: any
+  additionalModelRequestFields?: Record<string, any>
   stream?: boolean
 }
 
-export type BedrockSdkRawOutput = AsyncIterable<any> | any
-export type BedrockSdkRawChunk = any
+// 使用AWS SDK的联合类型，支持流式和非流式响应
+export type BedrockSdkRawOutput = AsyncIterable<ConverseStreamOutput> | ConverseResponse
+
+// 流式响应的各种事件类型
+export type BedrockSdkRawChunk =
+  | MessageStartEvent
+  | ContentBlockStartEvent
+  | ContentBlockDeltaEvent
+  | ContentBlockStopEvent
+  | MessageStopEvent
+  | ConverseResponse
+  | ConverseStreamMetadataEvent
 
 export type BedrockSdkMessageParam = {
-  role: string
-  content: BedrockSdkContentBlock[]
+  role: 'user' | 'assistant' | 'system'
+  content: ContentBlock[]
 }
 
-export type BedrockSdkContentBlock = {
-  text?: string
-  image?: any
-  toolResult?: any
-  toolUse?: {
-    toolUseId?: string
-    name?: string
-    input?: any
-  }
-}
+// 直接使用AWS SDK的ContentBlock，更加完整和准确
+export type BedrockSdkContentBlock = ContentBlock
 
 export type BedrockSdkToolCall = {
   toolUseId: string
   name: string
   input: any
-  type: string
+  type: 'tool_use'
 }
 
-export type BedrockSdkTool = any
+// 使用AWS SDK的原生Tool类型
+export type BedrockSdkTool = BedrockTool
 
 export type BedrockOptions = {
   streamOutput: boolean
